@@ -4,6 +4,7 @@ import com.bookkeeping.app.data.local.entity.TransactionCategory
 import com.bookkeeping.app.data.local.entity.TransactionEntity
 import com.bookkeeping.app.data.local.entity.TransactionSource
 import com.bookkeeping.app.data.local.entity.TransactionType
+import java.math.BigDecimal
 
 // 解析支付宝 / 微信通知文本，提取金额、收支方向、商户名。
 //
@@ -32,11 +33,9 @@ object NotificationParser {
     // 收入关键词
     private val INCOME_KEYWORDS = listOf(
         "成功收款", "收款成功", "已收款", "您已收款",
-        "到账", "已到账", "到帐",
-        "收款", "收款￥", "入账",
-        "收到转账", "收到红包", "转账到账",
+        "收款￥", "收到转账", "转账到账",
         "向你付款", "向您付款",  // 别人付给你（微信）
-        "退款", "返现",
+        "退款成功", "已退款", "收到退款",
     )
 
     // 支出关键词
@@ -47,6 +46,13 @@ object NotificationParser {
         "消费",
         "支出", "的支出",  // 支付宝："你有一笔 X 元的支出"
     )
+
+    // 优惠红包、券和活动额度不是账户中的现金。模糊通知不自动记账。
+    private val PROMOTION_KEYWORDS = listOf(
+        "送你", "送您", "赠送", "领取", "领红包", "抢红包", "优惠券", "红包券",
+        "满减", "立减", "券包", "限时优惠", "活动红包", "购物红包", "闪购红包",
+    )
+    private val FAILED_KEYWORDS = listOf("付款失败", "支付失败", "交易关闭", "订单取消", "未付款")
 
     // "向 商户名 付款" 模式（区分于"向你/您 付款"）= 支出
     private val PAY_TO_MERCHANT_REGEX = Regex("""向\s*(?!你|您)(\S+?)\s*付款""")
@@ -69,6 +75,8 @@ object NotificationParser {
         text: String?,
         timestampMs: Long,
     ): TransactionEntity? {
+        if (packageName == BankAppNotificationParser.CCB_PACKAGE)
+            return BankAppNotificationParser.parse(title, text, timestampMs)
         val source = when (packageName) {
             PKG_ALIPAY -> TransactionSource.ALIPAY
             PKG_WECHAT -> TransactionSource.WECHAT
@@ -87,21 +95,25 @@ object NotificationParser {
         timestampMs: Long,
     ): TransactionEntity? {
         if (full.isBlank()) return null
+        if (FAILED_KEYWORDS.any(full::contains)) return null
+        if (PROMOTION_KEYWORDS.any(full::contains)) return null
+        // 单说“收到红包”“返现”“到账”可能指优惠资格，不能证明钱已经入账。
+        if ((full.contains("红包") || full.contains("返现")) &&
+            INCOME_KEYWORDS.none(full::contains) && EXPENSE_KEYWORDS.none(full::contains)) return null
 
         // 1. 提金额
-        val amountYuan = extractAmount(full) ?: return null
-        if (amountYuan <= 0) return null
+        val amountCents = extractAmountCents(full) ?: return null
 
         // 2. 判收支方向。优先级：
         //    a. INCOME 关键词（包括"向你付款"这种明确信号）
         //    b. EXPENSE 关键词
         //    c. "向 商户 付款"模式（排除"向你/您"）
-        //    d. 默认 EXPENSE
+        //    d. 没有明确交易动作就跳过
         val type = when {
             INCOME_KEYWORDS.any { full.contains(it) } -> TransactionType.INCOME
             EXPENSE_KEYWORDS.any { full.contains(it) } -> TransactionType.EXPENSE
             PAY_TO_MERCHANT_REGEX.containsMatchIn(full) -> TransactionType.EXPENSE
-            else -> TransactionType.EXPENSE
+            else -> return null
         }
 
         // 3. 提商户名 + 自动分类
@@ -109,7 +121,7 @@ object NotificationParser {
         val category = CategoryClassifier.classify(merchant, full)
 
         return TransactionEntity(
-            amountCents = (amountYuan * 100).toLong(),
+            amountCents = amountCents,
             type = type.name,
             category = category.name,
             merchant = merchant,
@@ -120,14 +132,14 @@ object NotificationParser {
         )
     }
 
-    private fun extractAmount(text: String): Double? {
-        AMOUNT_REGEX_SYMBOL.find(text)?.let {
-            return it.groupValues[1].toDoubleOrNull()
-        }
-        AMOUNT_REGEX_YUAN.find(text)?.let {
-            return it.groupValues[1].toDoubleOrNull()
-        }
-        return null
+    private fun extractAmountCents(text: String): Long? {
+        val value = AMOUNT_REGEX_SYMBOL.find(text)?.groupValues?.get(1)
+            ?: AMOUNT_REGEX_YUAN.find(text)?.groupValues?.get(1)
+            ?: return null
+        return runCatching {
+            val cents = BigDecimal(value).movePointRight(2).setScale(0).longValueExact()
+            cents.takeIf { it > 0 }
+        }.getOrNull()
     }
 
     private fun extractMerchant(text: String): String {

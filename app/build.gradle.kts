@@ -11,11 +11,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.bookkeeping.app"
+        applicationId = "com.bookkeeping.localassets"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 11
+        versionName = "1.10"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -75,6 +75,9 @@ dependencies {
 
     // Vico 图表
     implementation(libs.vico.compose.m3)
+
+    // 解析银行导出的文字版 PDF 流水。
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 
     // 测试
     testImplementation(libs.junit)

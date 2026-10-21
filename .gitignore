@@ -13,3 +13,18 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# 本机文件与财务账单
+.idea/
+.kotlin/
+*.apk
+*.aab
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.csv
+*.xls
+*.xlsx
+*.pdf
+.codex-remote-attachments/

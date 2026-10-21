@@ -46,17 +46,28 @@ interface TransactionDao {
     @Query("SELECT * FROM transactions WHERE id = :id")
     suspend fun getById(id: Long): TransactionEntity?
 
+    @Query("SELECT * FROM transactions WHERE importKey = :key LIMIT 1")
+    suspend fun getByImportKey(key: String): TransactionEntity?
+
+    @Query("SELECT * FROM transactions WHERE amountCents = :amountCents AND type = :type AND timestamp BETWEEN :startMs AND :endMs")
+    suspend fun findNear(amountCents: Long, type: String, startMs: Long, endMs: Long): List<TransactionEntity>
+
     // 用于自动抓取路径去重：在时间窗口内找同来源 + 同金额的记录。
     // 命中即认为是重复（同一笔交易被通知/无障碍/SMS 多个通道抓到了）。
     @Query("""
         SELECT * FROM transactions
-        WHERE source = :source AND amountCents = :amountCents
+        WHERE source = :source AND amountCents = :amountCents AND type = :type
+          AND (account = :account OR (account IS NULL AND :account IS NULL))
+          AND (merchant = :merchant OR merchant = '' OR :merchant = '')
           AND timestamp >= :windowStartMs AND timestamp <= :windowEndMs
         LIMIT 1
     """)
     suspend fun findRecentSameAmount(
         source: String,
         amountCents: Long,
+        type: String,
+        account: String?,
+        merchant: String,
         windowStartMs: Long,
         windowEndMs: Long,
     ): TransactionEntity?

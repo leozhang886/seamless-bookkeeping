@@ -1,6 +1,7 @@
 package com.bookkeeping.app.data.local.entity
 
 import androidx.room.Entity
+import androidx.room.ColumnInfo
 import androidx.room.PrimaryKey
 
 // 一笔交易在数据库里的"行"。
@@ -34,13 +35,23 @@ data class TransactionEntity(
 
     // 时间戳（毫秒），用于排序、按月统计
     val timestamp: Long,
+    // Stable key from an imported bill. Null for live and manual transactions.
+    val importKey: String? = null,
+    // PDF 银行卡侧资金方向；转账本身仍不计入收入或支出。
+    val bankFlow: String? = null,
+    // 已确认要反映到哪个资产账户；余额由手动起点和这些交易实时计算。
+    val balanceAccountId: Long? = null,
+    // 旧版交易已包含在用户手动填写的余额内，不再追溯计算。
+    val balanceTrackingVersion: Int? = 1,
+    // 用户明确选择“暂不计入”时不再列为待核对；旧记录默认仍待核对。
+    @ColumnInfo(defaultValue = "0") val balanceIgnored: Boolean = false,
 )
 
 // 收入还是支出
-enum class TransactionType { EXPENSE, INCOME }
+enum class TransactionType { EXPENSE, INCOME, TRANSFER }
 
 // 来源：手动 / 各种自动渠道
-enum class TransactionSource { MANUAL, ALIPAY, WECHAT, BANK_SMS, OTHER }
+enum class TransactionSource { MANUAL, ALIPAY, WECHAT, BANK_SMS, BANK_APP, BANK_PDF, OTHER }
 
 // 分类。先列常用的，后面可以扩展
 enum class TransactionCategory(val displayName: String) {

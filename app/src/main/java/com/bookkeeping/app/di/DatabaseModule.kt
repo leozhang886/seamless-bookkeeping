@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import com.bookkeeping.app.data.local.BookkeepingDatabase
 import com.bookkeeping.app.data.local.dao.TransactionDao
+import com.bookkeeping.app.data.local.dao.AccountDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -28,11 +29,14 @@ object DatabaseModule {
             BookkeepingDatabase::class.java,
             BookkeepingDatabase.DB_NAME
         )
-            // 开发阶段：升级时直接丢库重建。正式上线必须改为正式 migration。
-            .fallbackToDestructiveMigration()
+            .addMigrations(BookkeepingDatabase.MIGRATION_1_2, BookkeepingDatabase.MIGRATION_2_3,
+                BookkeepingDatabase.MIGRATION_3_4)
             .build()
     }
 
     @Provides
     fun provideTransactionDao(db: BookkeepingDatabase): TransactionDao = db.transactionDao()
+
+    @Provides
+    fun provideAccountDao(db: BookkeepingDatabase): AccountDao = db.accountDao()
 }

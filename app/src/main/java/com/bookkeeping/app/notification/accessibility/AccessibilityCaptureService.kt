@@ -4,9 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.content.ComponentName
 import android.content.Context
 import android.provider.Settings
-import android.util.Log
 import android.view.accessibility.AccessibilityEvent
-import com.bookkeeping.app.BuildConfig
 import com.bookkeeping.app.data.local.entity.TransactionEntity
 import com.bookkeeping.app.data.repository.TransactionRepository
 import dagger.hilt.android.EntryPointAccessors
@@ -47,56 +45,28 @@ class AccessibilityCaptureService : AccessibilityService() {
                 WechatRedPacketExtractor(),
             ),
         )
-        if (BuildConfig.DEBUG) Log.d(TAG, "AccessibilityCaptureService connected")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         val pkg = event.packageName?.toString() ?: return
 
-        // 入口处不过滤包名先打 log，方便确认事件分发是否被 vivo 拦截
-        if (BuildConfig.DEBUG) {
-            Log.d(TAG, "EVT type=${eventTypeName(event.eventType)} pkg=$pkg class=${event.className}")
-        }
-
         val list = extractors[pkg] ?: return
         val root = rootInActiveWindow
-        if (root == null) {
-            if (BuildConfig.DEBUG) Log.d(TAG, "  -> rootInActiveWindow=null, skip")
-            return
-        }
+        if (root == null) return
 
         // 强制刷新一次根节点，避免事件到达时 UI 树尚未填充完
         runCatching { root.refresh() }
 
-        if (BuildConfig.DEBUG && event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            Log.d(TAG, "  -> Tree (childCount=${root.childCount}):\n${root.dumpTree()}")
-        }
-
         for (ext in list) {
             val tx = runCatching { ext.extract(root, event) }
-                .onFailure { if (BuildConfig.DEBUG) Log.w(TAG, "  -> extractor ${ext.javaClass.simpleName} threw", it) }
                 .getOrNull()
 
-            if (tx == null) {
-                if (BuildConfig.DEBUG) Log.v(TAG, "  -> ${ext.javaClass.simpleName} no match")
-                continue
-            }
+            if (tx == null) continue
 
-            if (!shouldEmit(tx)) {
-                if (BuildConfig.DEBUG) Log.d(TAG, "  -> ${ext.javaClass.simpleName} matched but fingerprint duplicate, skip")
-                continue
-            }
+            if (!shouldEmit(tx)) continue
             persist(tx)
             break
         }
-    }
-
-    private fun eventTypeName(type: Int): String = when (type) {
-        AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> "WindowStateChanged"
-        AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> "WindowContentChanged"
-        AccessibilityEvent.TYPE_VIEW_CLICKED -> "ViewClicked"
-        AccessibilityEvent.TYPE_VIEW_SCROLLED -> "ViewScrolled"
-        else -> "Type$type"
     }
 
     private fun shouldEmit(tx: TransactionEntity): Boolean {
@@ -110,14 +80,7 @@ class AccessibilityCaptureService : AccessibilityService() {
 
     private fun persist(tx: TransactionEntity) {
         scope.launch {
-            val id = repository.insertIfNotDuplicate(tx)
-            if (id == null) {
-                if (BuildConfig.DEBUG) Log.d(TAG, "Accessibility: skipped duplicate (in 60s window)")
-            } else if (BuildConfig.DEBUG) {
-                Log.i(TAG, "Accessibility captured id=$id amount=${tx.amountCents} source=${tx.source} type=${tx.type}")
-            } else {
-                Log.i(TAG, "Accessibility captured id=$id")
-            }
+            repository.insertIfNotDuplicate(tx)
         }
     }
 
@@ -131,7 +94,6 @@ class AccessibilityCaptureService : AccessibilityService() {
     }
 
     companion object {
-        private const val TAG = "BkAccessibility"
         private const val FINGERPRINT_TTL_MS = 30_000L
 
         const val PKG_ALIPAY = "com.eg.android.AlipayGphone"

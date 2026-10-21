@@ -4,6 +4,7 @@ import com.bookkeeping.app.data.local.entity.TransactionCategory
 import com.bookkeeping.app.data.local.entity.TransactionEntity
 import com.bookkeeping.app.data.local.entity.TransactionSource
 import com.bookkeeping.app.data.local.entity.TransactionType
+import java.math.BigDecimal
 
 // 解析银行短信文本，提取金额、收支方向、银行、卡尾号。
 //
@@ -48,6 +49,9 @@ object SmsParser {
 
     // 卡尾号 / 账户尾号
     private val CARD_NO_REGEX = Regex("""尾号\s*(\d{4})""")
+    private val FUND_PURCHASE_WORDS = listOf("基金申购", "基金购买")
+    private val COMPLETED_DEBIT_WORDS = listOf("扣款", "扣除", "支出", "支付", "转出", "划出", "成功")
+    private val NOT_COMPLETED_WORDS = listOf("失败", "撤销", "预约", "未成功")
 
     // 收入关键词
     private val INCOME_KEYWORDS = listOf(
@@ -74,11 +78,15 @@ object SmsParser {
         val bank = detectBank(body) ?: return null
 
         // 2. 提金额
-        val amountYuan = extractAmount(body) ?: return null
-        if (amountYuan <= 0) return null
+        val amountCents = extractAmountCents(body) ?: return null
+        if (amountCents <= 0) return null
+        val fundPurchase = FUND_PURCHASE_WORDS.any(body::contains)
+        if (fundPurchase && (NOT_COMPLETED_WORDS.any(body::contains) ||
+                COMPLETED_DEBIT_WORDS.none(body::contains))) return null
 
         // 3. 判收支方向。无法确定时返回 null（避免误入库验证码等）
         val type = when {
+            fundPurchase -> TransactionType.TRANSFER
             INCOME_KEYWORDS.any { body.contains(it) } -> TransactionType.INCOME
             EXPENSE_KEYWORDS.any { body.contains(it) } -> TransactionType.EXPENSE
             else -> return null
@@ -89,10 +97,11 @@ object SmsParser {
         val account = if (cardLast4.isNotEmpty()) "$bank ($cardLast4)" else bank
 
         // 5. 自动分类（基于短信正文：能识别"工资到账"→SALARY、"加油"→TRANSPORT 等）
-        val category = CategoryClassifier.classify(merchant = "", contextText = body)
+        val category = if (type == TransactionType.TRANSFER) TransactionCategory.TRANSFER
+            else CategoryClassifier.classify(merchant = "", contextText = body)
 
         return TransactionEntity(
-            amountCents = (amountYuan * 100).toLong(),
+            amountCents = amountCents,
             type = type.name,
             category = category.name,
             merchant = "",
@@ -100,6 +109,7 @@ object SmsParser {
             source = TransactionSource.BANK_SMS.name,
             account = account,
             timestamp = timestampMs,
+            bankFlow = if (type == TransactionType.TRANSFER) "OUT" else null,
         )
     }
 
@@ -110,8 +120,9 @@ object SmsParser {
         return null
     }
 
-    private fun extractAmount(body: String): Double? {
+    private fun extractAmountCents(body: String): Long? {
         // 找所有金额，取第一个（通常第一个就是交易金额，"余额"在后面）
-        return AMOUNT_REGEX.find(body)?.groupValues?.get(1)?.toDoubleOrNull()
+        return AMOUNT_REGEX.find(body)?.groupValues?.get(1)
+            ?.toBigDecimalOrNull()?.multiply(BigDecimal(100))?.longValueExact()
     }
 }

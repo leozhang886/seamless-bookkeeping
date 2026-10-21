@@ -21,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -40,7 +41,10 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
     val viewingType by viewModel.viewingType.collectAsState()
     val dailyTotals by viewModel.dailyTotals.collectAsState()
 
-    Scaffold(topBar = { TopAppBar(title = { Text("本月统计") }) }) { innerPadding ->
+    Scaffold(topBar = { TopAppBar(
+        title = { Text("本月统计", style = MaterialTheme.typography.headlineSmall) },
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+    ) }) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -76,12 +80,12 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     // 饼图
                     item(key = "pie_chart") {
                         Card(modifier = Modifier.fillMaxWidth()) {
-                            Column(modifier = Modifier.padding(12.dp)) {
+                            Column(modifier = Modifier.padding(18.dp)) {
                                 Text(
                                     text = "分类占比",
                                     style = MaterialTheme.typography.titleSmall,
@@ -99,7 +103,7 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
                     // 日趋势柱状图
                     item(key = "daily_chart") {
                         Card(modifier = Modifier.fillMaxWidth()) {
-                            Column(modifier = Modifier.padding(12.dp)) {
+                            Column(modifier = Modifier.padding(18.dp)) {
                                 Text(
                                     text = "每日趋势",
                                     style = MaterialTheme.typography.titleSmall,
@@ -132,12 +136,12 @@ private fun TotalCard(totalCents: Long, type: TransactionType) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.primaryContainer
         )
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(20.dp)) {
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelLarge,
@@ -158,7 +162,7 @@ private fun CategoryStatRow(stat: CategoryStat, viewingType: TransactionType) {
     val amountColor = if (viewingType == TransactionType.INCOME)
         MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,

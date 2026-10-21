@@ -57,7 +57,7 @@ class KeepAliveService : Service() {
         return NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("无感记账正在运行")
-            .setContentText("保持后台抓取支付宝/微信/银行短信")
+            .setContentText("保持后台抓取支付与建行动账通知、银行短信")
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)

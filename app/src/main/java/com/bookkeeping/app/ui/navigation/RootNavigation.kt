@@ -4,16 +4,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -22,6 +26,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.bookkeeping.app.ui.screen.budget.BudgetScreen
+import com.bookkeeping.app.ui.screen.assets.AssetsScreen
 import com.bookkeeping.app.ui.screen.settings.SettingsScreen
 import com.bookkeeping.app.ui.screen.stats.StatsScreen
 import com.bookkeeping.app.ui.screen.transactions.TransactionListScreen
@@ -33,7 +38,7 @@ fun RootNavigation() {
 
     Scaffold(
         bottomBar = {
-            NavigationBar {
+            NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
                 val navBackStackEntry by navController.currentBackStackEntryAsState()
                 val currentDestination = navBackStackEntry?.destination
 
@@ -50,6 +55,12 @@ fun RootNavigation() {
                         },
                         icon = { Icon(item.icon, contentDescription = item.label) },
                         label = { Text(item.label) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
                     )
                 }
             }
@@ -57,9 +68,10 @@ fun RootNavigation() {
     ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = BottomNavItem.Transactions.route,
+            startDestination = BottomNavItem.Assets.route,
             modifier = Modifier.padding(innerPadding),
         ) {
+            composable(BottomNavItem.Assets.route) { AssetsScreen() }
             composable(BottomNavItem.Transactions.route) { TransactionListScreen() }
             composable(BottomNavItem.Stats.route) { StatsScreen() }
             composable(BottomNavItem.Budget.route) { BudgetScreen() }
@@ -69,12 +81,13 @@ fun RootNavigation() {
 }
 
 private sealed class BottomNavItem(val route: String, val label: String, val icon: ImageVector) {
+    data object Assets : BottomNavItem("assets", "资产", Icons.Filled.AccountBalance)
     data object Transactions : BottomNavItem("transactions", "账单", Icons.AutoMirrored.Filled.List)
     data object Stats : BottomNavItem("stats", "统计", Icons.Filled.PieChart)
     data object Budget : BottomNavItem("budget", "预算", Icons.Filled.AccountBalanceWallet)
     data object Settings : BottomNavItem("settings", "设置", Icons.Filled.Settings)
 
     companion object {
-        val ALL = listOf(Transactions, Stats, Budget, Settings)
+        val ALL = listOf(Assets, Transactions, Stats, Budget, Settings)
     }
 }

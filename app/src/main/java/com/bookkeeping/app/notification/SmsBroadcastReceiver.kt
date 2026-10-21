@@ -4,8 +4,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.provider.Telephony
-import android.util.Log
-import com.bookkeeping.app.BuildConfig
 import com.bookkeeping.app.data.repository.TransactionRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -37,26 +35,14 @@ class SmsBroadcastReceiver : BroadcastReceiver() {
         val fullBody = messages.joinToString(separator = "") { it.messageBody ?: "" }
         val timestamp = messages.first().timestampMillis
 
-        // 不在 release 构建中记录短信内容（含 PII：银行/卡尾号/金额）
-        if (BuildConfig.DEBUG) {
-            Log.d(TAG, "SMS from $sender: $fullBody")
-        }
-
         val parsed = SmsParser.parse(sender, fullBody, timestamp) ?: return
-
+        val pending = goAsync()
         scope.launch {
-            val id = repository.insertIfNotDuplicate(parsed)
-            if (id == null) {
-                if (BuildConfig.DEBUG) Log.d(TAG, "Skipped duplicate SMS")
-            } else if (BuildConfig.DEBUG) {
-                Log.i(TAG, "Auto-captured bank SMS: id=$id amount=${parsed.amountCents} account=${parsed.account}")
-            } else {
-                Log.i(TAG, "Auto-captured bank SMS: id=$id")
+            try {
+                repository.insertBankSmsIfNotDuplicate(parsed)
+            } finally {
+                pending.finish()
             }
         }
-    }
-
-    companion object {
-        private const val TAG = "BkSmsReceiver"
     }
 }

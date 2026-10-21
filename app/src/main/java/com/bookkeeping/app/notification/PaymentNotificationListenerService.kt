@@ -1,9 +1,8 @@
 package com.bookkeeping.app.notification
 
+import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
-import android.util.Log
-import com.bookkeeping.app.BuildConfig
 import com.bookkeeping.app.data.repository.TransactionRepository
 import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.CoroutineScope
@@ -12,7 +11,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
-// 监听全系统通知。当支付宝/微信发出支付成功通知时被回调。
+// 监听全系统通知，只解析已支持的支付应用和建设银行动账提醒。
 // 嵌入式类比：注册了一个"中断处理函数"，系统在通知到达时调用我们。
 class PaymentNotificationListenerService : NotificationListenerService() {
 
@@ -29,7 +28,6 @@ class PaymentNotificationListenerService : NotificationListenerService() {
             NotificationListenerEntryPoint::class.java
         )
         repository = entryPoint.transactionRepository()
-        if (BuildConfig.DEBUG) Log.d(TAG, "Service created")
     }
 
     override fun onDestroy() {
@@ -41,13 +39,14 @@ class PaymentNotificationListenerService : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         val packageName = sbn.packageName ?: return
         val extras = sbn.notification?.extras ?: return
-        val title = extras.getCharSequence("android.title")?.toString()
-        val text = extras.getCharSequence("android.text")?.toString()
-
-        // 不在 release 构建中记录通知内容（含 PII：金额/商户/付款方式）
-        if (BuildConfig.DEBUG) {
-            Log.d(TAG, "Notification from $packageName: title=$title text=$text")
-        }
+        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
+        val regularText = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
+        val text = if (packageName == BankAppNotificationParser.CCB_PACKAGE) {
+            val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
+            val onlyLine = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
+                ?.singleOrNull()?.toString()
+            listOfNotNull(regularText, bigText, onlyLine).maxByOrNull { it.length }
+        } else regularText
 
         val parsed = NotificationParser.parse(
             packageName = packageName,
@@ -57,21 +56,9 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         ) ?: return
 
         // 在后台协程里入库（IO 不能在主线程）。
-        // insertIfNotDuplicate：60s 内同来源同金额视为重复，跳过。覆盖
-        // "通知/SMS/无障碍可能抓到同一笔" 的场景。
+        // insertIfNotDuplicate 处理重复通知，以及银行短信与应用通知的重复记录。
         scope.launch {
-            val id = repository.insertIfNotDuplicate(parsed)
-            if (id == null) {
-                if (BuildConfig.DEBUG) Log.d(TAG, "Skipped duplicate notification")
-            } else if (BuildConfig.DEBUG) {
-                Log.i(TAG, "Auto-captured transaction id=$id amount=${parsed.amountCents} source=${parsed.source}")
-            } else {
-                Log.i(TAG, "Auto-captured transaction id=$id")
-            }
+            repository.insertIfNotDuplicate(parsed)
         }
-    }
-
-    companion object {
-        private const val TAG = "BkNotifListener"
     }
 }

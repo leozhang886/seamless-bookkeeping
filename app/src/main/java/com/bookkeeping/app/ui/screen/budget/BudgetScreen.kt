@@ -25,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -52,13 +53,16 @@ fun BudgetScreen(viewModel: BudgetViewModel = hiltViewModel()) {
     var showAddCategory by remember { mutableStateOf(false) }
     var editingCategory by remember { mutableStateOf<TransactionCategory?>(null) }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("预算") }) }) { innerPadding ->
+    Scaffold(topBar = { TopAppBar(
+        title = { Text("预算", style = MaterialTheme.typography.headlineSmall) },
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+    ) }) { innerPadding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             // 总预算卡片
             item(key = "total_budget") {
@@ -177,7 +181,7 @@ private fun TotalBudgetCard(
         ),
         onClick = onEdit,
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "本月总预算",
@@ -249,7 +253,7 @@ private fun CategoryBudgetCard(
     val overSpent = spentCents > budgetCents
 
     Card(modifier = Modifier.fillMaxWidth(), onClick = onEdit) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = category.displayName,

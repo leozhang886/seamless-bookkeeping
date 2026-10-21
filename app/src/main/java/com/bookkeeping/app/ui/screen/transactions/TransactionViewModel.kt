@@ -3,6 +3,7 @@ package com.bookkeeping.app.ui.screen.transactions
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bookkeeping.app.data.local.entity.TransactionCategory
+import com.bookkeeping.app.data.repository.AccountRepository
 import com.bookkeeping.app.data.local.entity.TransactionEntity
 import com.bookkeeping.app.data.local.entity.TransactionSource
 import com.bookkeeping.app.data.local.entity.TransactionType
@@ -19,8 +20,11 @@ import javax.inject.Inject
 
 @HiltViewModel
 class TransactionViewModel @Inject constructor(
-    private val repository: TransactionRepository
+    private val repository: TransactionRepository,
+    accounts: AccountRepository,
 ) : ViewModel() {
+    val accountList = accounts.observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     // 当前选中的分类筛选；null = 不筛选（显示全部）
     private val _categoryFilter = MutableStateFlow<TransactionCategory?>(null)
@@ -56,21 +60,23 @@ class TransactionViewModel @Inject constructor(
     }
 
     fun addTransaction(
-        amountYuan: Double,
+        amountCents: Long,
         type: TransactionType,
         category: TransactionCategory,
         merchant: String,
         note: String,
+        accountId: Long?,
     ) {
         viewModelScope.launch {
             val entity = TransactionEntity(
-                amountCents = (amountYuan * 100).toLong(),
+                amountCents = amountCents,
                 type = type.name,
                 category = category.name,
                 merchant = merchant,
                 note = note,
                 source = TransactionSource.MANUAL.name,
                 timestamp = System.currentTimeMillis(),
+                balanceAccountId = accountId,
             )
             repository.insert(entity)
         }
@@ -78,6 +84,25 @@ class TransactionViewModel @Inject constructor(
 
     fun delete(entity: TransactionEntity) {
         viewModelScope.launch { repository.delete(entity) }
+    }
+
+    fun editTransaction(
+        id: Long,
+        amountCents: Long,
+        type: TransactionType,
+        category: TransactionCategory,
+        merchant: String,
+        note: String,
+        accountId: Long?,
+        onResult: (Boolean) -> Unit,
+    ) {
+        viewModelScope.launch {
+            onResult(repository.edit(id, amountCents, type, category, merchant, note, accountId))
+        }
+    }
+
+    fun setBalanceAccount(transaction: TransactionEntity, accountId: Long?, ignore: Boolean = false) {
+        viewModelScope.launch { repository.setBalanceAccount(transaction.id, accountId, ignore) }
     }
 
     private fun currentMonthRange(): Pair<Long, Long> {
