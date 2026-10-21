@@ -12,21 +12,21 @@
 
 账本保存在手机本地，应用没有网络权限。导入的账单文件只在本机读取。语音识别是否联网取决于手机安装的识别服务。
 
-## 使用前请看
+## 获取与安装
 
-[安装与使用说明](K80Pro-安装与使用.md)写明了余额起点、重复交易和导入格式。公开源码不包含个人账单、数据库或 APK。自行编译的调试包与其他签名的安装包不能直接互相覆盖；升级前不要卸载已装应用，否则本机账本会丢失。
-
-同一笔银行卡付款若同时出现在银行 PDF 和支付平台账单中，可能在收支统计里重复出现，导入后需要核对。建设银行 PDF 只有日期时，交易会按当天 00:00 显示。当前没有账本导出备份功能。自动测试已通过，红米 K80 Pro 的完整真机导入流程尚未验证。
-
-## 编译
-
-需要 Android SDK、JDK 21 和 Gradle 8.9。项目使用 Kotlin、Jetpack Compose、Room 和 Hilt。
+这个仓库只提供源码，不提供已验证的安装包。Windows 上准备 JDK 21 和 Android SDK 35 后，在纯英文路径下运行：
 
 ```powershell
-./gradlew testDebugUnitTest assembleDebug
+.\gradlew.bat testDebugUnitTest assembleDebug
 ```
 
-生成的 APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。本仓库不提交调试 APK，也不把它作为已验证的正式发行版。
+生成的 APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。安装、升级和导入步骤见 [安装与使用说明](K80Pro-安装与使用.md)。自行编译的调试包如果与手机上已装版本签名不同，不能直接覆盖；当前也没有账本导出备份功能，请勿为了安装新版卸载旧版。
+
+## 使用前请看
+
+同一笔银行卡付款若同时出现在银行 PDF 和支付平台账单中，可能在收支统计里重复出现，导入后需要核对。建设银行 PDF 只有日期时，交易会按当天 00:00 显示。自动测试已通过，红米 K80 Pro 的完整真机导入流程尚未验证。
+
+项目使用 Kotlin、Jetpack Compose、Room 和 Hilt。编译使用仓库内的 Gradle 8.9 Wrapper；Windows 中文路径可能导致单元测试无法加载测试类，建议用纯英文路径。
 
 ## 许可与来源
 

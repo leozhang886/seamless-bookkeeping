@@ -1,10 +1,18 @@
 # 本地资产：红米 K80 Pro 安装与使用
 
-这是基于 [seamless-bookkeeping](https://github.com/DykiSensei/seamless-bookkeeping) 修改的个人本地版。账单导入参考了 [WhereIsMyMoney](https://github.com/FridayKoi/WhereIsMyMoney) 的表头思路，解析代码重新编写。项目沿用原仓库的 MIT 许可。
+这是基于 [seamless-bookkeeping](https://github.com/DykiSensei/seamless-bookkeeping) 修改的本地记账版，沿用原项目的 MIT 许可。公开仓库只包含源码和模拟测试数据，不包含个人账单、数据库或 APK。
 
 ## 安装与升级
 
-把 `本地资产-K80Pro-debug.apk` 复制到手机，用文件管理器打开安装。升级时直接覆盖安装，不要卸载旧版；卸载会清除本机账本。新版沿用原来的调试签名，已有账单和资产账户会保留。
+Windows 上准备 JDK 21 和 Android SDK 35，把仓库放在纯英文路径下，进入项目目录运行：
+
+```powershell
+.\gradlew.bat testDebugUnitTest assembleDebug
+```
+
+编译通过后，将 `app/build/outputs/apk/debug/app-debug.apk` 复制到手机，用文件管理器打开安装。这是调试包，不是经过真机完整验收的正式发行版。
+
+升级时应直接覆盖安装，不要卸载旧版；卸载会清除本机账本。只有应用 ID 和签名均与已装版本一致时才能覆盖。不同电脑编译的调试包通常使用不同签名；若手机提示签名不一致，先保留旧版和数据，不要通过卸载来强行安装。目前应用没有账本导出备份功能。
 
 从 1.9 版起，应用不再监听支付通知、银行 App 通知、短信或无障碍页面，也不需要通知使用权、短信权限、无障碍权限和常驻后台服务。旧版已记录的交易仍保留。
 
@@ -14,7 +22,7 @@
 
 导入后抽查退款、基金申购、充值、提现和银行卡付款。同一笔银行卡付款若同时出现在银行 PDF 和微信、支付宝账单里，两条记录可能同时出现在收支统计中，需要在账单页核对。首次升级后导入的时间范围若与旧版自动抓取记录重叠，也要检查是否重复；应用不会凭金额猜测哪两条是同一笔。
 
-目前只支持微信、支付宝的原始 CSV / XLSX，以及建设银行文字版 PDF。扫描图片版 PDF 和其他银行格式暂不支持。建行 PDF 只有日期，没有具体时分，账单按当天 00:00 排序。
+扫描图片版 PDF 和其他银行格式暂不支持。建行 PDF 只有日期，没有具体时分，账单按当天 00:00 排序。
 
 ## 资产余额
 
@@ -31,13 +39,3 @@
 ## 隐私与局限
 
 应用没有网络权限，账本保存在本机数据库，系统自动备份已关闭。导入文件只在本机读取，不上传。语音输入由手机安装的识别服务处理，是否联网取决于该服务。当前没有账本导出备份功能；卸载会清除数据。此版已通过自动测试，但尚未在红米 K80 Pro 上完成真机导入验证。
-
-## 重新编译
-
-在 Windows 上准备 JDK 21 和 Android SDK 35，进入项目目录运行：
-
-```powershell
-.\gradlew.bat testDebugUnitTest assembleDebug
-```
-
-输出在 `app/build/outputs/apk/debug/app-debug.apk`。建议使用纯英文路径；中文路径可能让 Gradle 单元测试找不到测试类。
