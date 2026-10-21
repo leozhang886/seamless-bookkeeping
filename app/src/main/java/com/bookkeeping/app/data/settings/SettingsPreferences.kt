@@ -25,6 +25,13 @@ class SettingsPreferences @Inject constructor(
     fun observeKeepAliveEnabled(): Flow<Boolean> =
         context.settingsDataStore.data.map { it[KEY_KEEP_ALIVE] ?: false }
 
+    fun observeAutoCaptureEnabled(): Flow<Boolean> =
+        context.settingsDataStore.data.map { it[KEY_AUTO_CAPTURE] ?: false }
+
+    suspend fun setAutoCaptureEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { it[KEY_AUTO_CAPTURE] = enabled }
+    }
+
     suspend fun setKeepAliveEnabled(enabled: Boolean) {
         context.settingsDataStore.edit { it[KEY_KEEP_ALIVE] = enabled }
     }
@@ -37,5 +44,6 @@ class SettingsPreferences @Inject constructor(
 
     companion object {
         private val KEY_KEEP_ALIVE = booleanPreferencesKey("keep_alive_enabled")
+        private val KEY_AUTO_CAPTURE = booleanPreferencesKey("auto_capture_enabled")
     }
 }

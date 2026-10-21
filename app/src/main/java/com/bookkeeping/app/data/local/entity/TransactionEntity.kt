@@ -3,10 +3,14 @@ package com.bookkeeping.app.data.local.entity
 import androidx.room.Entity
 import androidx.room.ColumnInfo
 import androidx.room.PrimaryKey
+import androidx.room.Index
 
 // 一笔交易在数据库里的"行"。
 // @Entity 告诉 Room "这个类对应数据库表"，表名是 transactions。
-@Entity(tableName = "transactions")
+@Entity(tableName = "transactions", indices = [
+    Index("timestamp"), Index("importKey"), Index("balanceAccountId"),
+    Index("importBatchId"), Index("duplicateOfId"), Index("relatedTransactionId"),
+])
 data class TransactionEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
@@ -45,6 +49,18 @@ data class TransactionEntity(
     val balanceTrackingVersion: Int? = 1,
     // 用户明确选择“暂不计入”时不再列为待核对；旧记录默认仍待核对。
     @ColumnInfo(defaultValue = "0") val balanceIgnored: Boolean = false,
+    // One imported row belongs to one reversible batch. Null for older/manual rows.
+    val importBatchId: Long? = null,
+    // Secondary evidence for the same economic event must not enter income/expense totals.
+    val duplicateOfId: Long? = null,
+    // REFUND or REIMBURSEMENT of another transaction; nullable for ordinary movements.
+    val relatedTransactionId: Long? = null,
+    val relationKind: String? = null,
+    // Soft deletion makes a mistaken action reversible.
+    val deletedAt: Long? = null,
+    @ColumnInfo(defaultValue = "1") val parserVersion: Int = 1,
+    val sourceRow: Int? = null,
+    val sourceOrderId: String? = null,
 )
 
 // 收入还是支出

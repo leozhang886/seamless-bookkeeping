@@ -47,6 +47,18 @@ class BudgetPreferences @Inject constructor(
         }
     }
 
+    suspend fun replace(settings: BudgetSettings) {
+        context.budgetDataStore.edit { prefs ->
+            if (settings.monthlyTotalCents > 0) prefs[KEY_MONTHLY_TOTAL] = settings.monthlyTotalCents
+            else prefs.remove(KEY_MONTHLY_TOTAL)
+            TransactionCategory.entries.forEach { category ->
+                val key = longKey(category)
+                val amount = settings.perCategory[category] ?: 0L
+                if (amount > 0) prefs[key] = amount else prefs.remove(key)
+            }
+        }
+    }
+
     private fun longKey(cat: TransactionCategory) = longPreferencesKey("cat_${cat.name}")
 
     companion object {

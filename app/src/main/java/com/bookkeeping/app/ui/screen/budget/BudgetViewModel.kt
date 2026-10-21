@@ -45,15 +45,15 @@ class BudgetViewModel @Inject constructor(
         .map { it.values.sum() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0L)
 
-    fun setMonthlyTotal(yuan: Double) {
+    fun setMonthlyTotal(cents: Long) {
         viewModelScope.launch {
-            budgetPrefs.setMonthlyTotal((yuan * 100).toLong())
+            budgetPrefs.setMonthlyTotal(cents)
         }
     }
 
-    fun setCategoryBudget(category: TransactionCategory, yuan: Double) {
+    fun setCategoryBudget(category: TransactionCategory, cents: Long) {
         viewModelScope.launch {
-            budgetPrefs.setCategoryBudget(category, (yuan * 100).toLong())
+            budgetPrefs.setCategoryBudget(category, cents)
         }
     }
 

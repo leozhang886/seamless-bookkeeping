@@ -72,6 +72,7 @@ fun AddTransactionDialog(
     var selectedAccountId by remember(transaction?.id) { mutableStateOf(transaction?.balanceAccountId?.takeIf { id -> accounts.any { it.id == id } }) }
     var voiceStatus by remember { mutableStateOf<String?>(null) }
     val transfer = transaction?.type == TransactionType.TRANSFER.name
+    val linkedReturn = transaction?.relationKind in setOf("REFUND", "REIMBURSEMENT")
     val availableAccounts = if (transaction == null) accounts.filter { it.kind != "FUND" } else
         accounts.filter { canLinkBalance(transaction) &&
             (eligibleBalanceAccount(it, transaction) || it.id == transaction.balanceAccountId) }
@@ -117,7 +118,7 @@ fun AddTransactionDialog(
             Column(modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (errorMessage != null) Text(errorMessage)
-                if (!transfer) TextButton(onClick = {
+                if (!transfer && !linkedReturn) TextButton(onClick = {
                     voiceStatus = null
                     val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -132,10 +133,12 @@ fun AddTransactionDialog(
                         voiceStatus = "语音识别服务无法启动，请检查手机设置。"
                     }
                 }) { Text("🎙 语音输入") }
-                if (!transfer) Text("语音由手机的识别服务处理，保存前请核对。")
+                if (!transfer && !linkedReturn) Text("语音由手机的识别服务处理，保存前请核对。")
                 voiceStatus?.let { Text(it) }
                 // 收入 / 支出 切换
-                if (transfer) Text("转账方向沿用原流水；这里只修改金额和说明。") else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (transfer) Text("转账方向沿用原流水；修改金额会同步改变转入账户，手续费不变。")
+                else if (linkedReturn) Text("这笔款项已关联原支出；只能调整金额和说明。")
+                else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(
                         selected = selectedType == TransactionType.EXPENSE,
                         onClick = { selectedType = TransactionType.EXPENSE },
@@ -161,13 +164,13 @@ fun AddTransactionDialog(
                 // 分类下拉
                 ExposedDropdownMenuBox(
                     expanded = categoryMenuExpanded,
-                    onExpandedChange = { if (!transfer) categoryMenuExpanded = it }
+                    onExpandedChange = { if (!transfer && !linkedReturn) categoryMenuExpanded = it }
                 ) {
                     OutlinedTextField(
                         value = selectedCategory.displayName,
                         onValueChange = { },
                         readOnly = true,
-                        enabled = !transfer,
+                        enabled = !transfer && !linkedReturn,
                         label = { Text("分类") },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryMenuExpanded) },
                         modifier = Modifier.menuAnchor().fillMaxWidth()

@@ -10,4 +10,5 @@ data class AccountEntity(
     val kind: String,
     val balanceCents: Long,
     val updatedAt: Long,
+    val archivedAt: Long? = null,
 )

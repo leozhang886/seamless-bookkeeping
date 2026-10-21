@@ -21,12 +21,16 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -44,6 +48,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -58,6 +63,7 @@ import java.math.BigDecimal
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -66,20 +72,25 @@ fun AssetsScreen(viewModel: AssetsViewModel = hiltViewModel()) {
     val transactions by viewModel.transactionList.collectAsState()
     val message by viewModel.message.collectAsState()
     val busy by viewModel.busy.collectAsState()
+    val preview by viewModel.preview.collectAsState()
+    val checkpoints by viewModel.checkpoints.collectAsState()
+    val snackbarHost = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var addAccount by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<AccountEntity?>(null) }
     var deleting by remember { mutableStateOf<AccountEntity?>(null) }
     var reconcilingId by remember { mutableStateOf<Long?>(null) }
+    var historyId by remember { mutableStateOf<Long?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             val name = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
                 ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
                 ?: uri.lastPathSegment.orEmpty()
-            viewModel.importBill(uri, name)
+            viewModel.previewBill(uri, name)
         }
     }
-    Scaffold(topBar = {
+    Scaffold(snackbarHost = { SnackbarHost(snackbarHost) }, topBar = {
         TopAppBar(
             title = { Text("我的资产", style = MaterialTheme.typography.headlineSmall) },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
@@ -132,6 +143,10 @@ fun AssetsScreen(viewModel: AssetsViewModel = hiltViewModel()) {
                 }
             }
             item {
+                TextButton(onClick = viewModel::undoLatestImport, enabled = !busy,
+                    modifier = Modifier.padding(horizontal = 16.dp)) { Text("撤销最近一批导入") }
+            }
+            item {
                 Text("账户与基金", style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp))
             }
@@ -160,6 +175,7 @@ fun AssetsScreen(viewModel: AssetsViewModel = hiltViewModel()) {
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (account.kind != "FUND") TextButton(onClick = { reconcilingId = account.id }) { Text("对账") }
+                            TextButton(onClick = { historyId = account.id; viewModel.loadCheckpoints(account.id) }) { Text("校准记录") }
                             TextButton(onClick = { editing = account }) { Text(if (account.kind == "FUND") "更新市值" else "更新余额") }
                             TextButton(onClick = { deleting = account }) { Text("删除") }
                         }
@@ -180,20 +196,71 @@ fun AssetsScreen(viewModel: AssetsViewModel = hiltViewModel()) {
             }
         }
     }
-    if (addAccount) BalanceDialog(null, onDismiss = { addAccount = false }) { name, kind, cents ->
+    preview?.let { selected ->
+        var acceptRejected by remember(selected) { mutableStateOf(false) }
+        AlertDialog(onDismissRequest = viewModel::dismissPreview,
+            title = { Text("核对导入 · ${selected.fileName.take(35)}") },
+            text = {
+                Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val report = selected.report
+                    Text("来源 ${report.source} · 原始 ${report.originalRows} 行 · 可导入 ${report.records.size} 笔 · 忽略 ${report.ignoredRows} 行 · 异常 ${report.rejected.size} 行")
+                    Text("已存在同单号 ${selected.assessment.exactDuplicates} 笔；疑似跨账单重复 ${selected.assessment.crossSourceCandidates} 笔，导入后请人工关联。")
+                    Text("识别金额合计 ¥${money(report.amountCents)}。这只是原始金额合计，不等于收入或支出。")
+                    if (report.source == "BANK_PDF") Text("PDF 只识别建行文字版固定表格。原单只含日期；与当天手动余额起点重合的流水不会自动改余额，请对照原文件核对笔数与金额。")
+                    if (report.rejected.isNotEmpty()) {
+                        Text("异常行：", style = MaterialTheme.typography.titleSmall)
+                        report.rejected.take(20).forEach { Text("第 ${it.row} 行：${it.reason}") }
+                        if (report.rejected.size > 20) Text("另有 ${report.rejected.size - 20} 行未显示，建议核对原文件。")
+                        Row { Checkbox(checked = acceptRejected, onCheckedChange = { acceptRejected = it }); Text("已核对异常行，仍导入可识别的流水") }
+                    }
+                    Text("流水预览：", style = MaterialTheme.typography.titleSmall)
+                    report.records.take(20).forEach { bill ->
+                        Text("${bill.sourceRow?.let { "第 $it 行 " }.orEmpty()}${bill.merchant} · ¥${money(bill.amountCents)} · ${bill.type}")
+                    }
+                    if (report.records.size > 20) Text("另外 ${report.records.size - 20} 笔不在此处显示。")
+                    Text("重复单号会在提交时跳过。跨银行与支付平台的同一消费需要人工核对，不能只凭相同金额自动合并。")
+                }
+            },
+            confirmButton = { TextButton(onClick = viewModel::confirmImport,
+                enabled = !busy && selected.report.records.isNotEmpty() &&
+                    (selected.report.rejected.isEmpty() || acceptRejected)) {
+                Text("确认导入")
+            } },
+            dismissButton = { TextButton(onClick = viewModel::dismissPreview) { Text("取消") } },
+        )
+    }
+    if (addAccount) BalanceDialog(null, onDismiss = { addAccount = false }) { name, kind, cents, _ ->
         viewModel.addAccount(name, kind, cents); addAccount = false
     }
     editing?.let { account ->
-        BalanceDialog(account, onDismiss = { editing = null }) { _, _, cents ->
-            viewModel.updateBalance(account.id, cents); editing = null
+        BalanceDialog(account, onDismiss = { editing = null }) { _, _, cents, reason ->
+            viewModel.updateBalance(account.id, cents, reason); editing = null
         }
     }
     deleting?.let { account ->
-        AlertDialog(onDismissRequest = { deleting = null }, title = { Text("删除账户？") },
-            text = { Text("只删除这条资产记录，已有交易记录仍保留。") },
-            confirmButton = { TextButton(onClick = { viewModel.deleteAccount(account.id); deleting = null }) { Text("删除") } },
+        AlertDialog(onDismissRequest = { deleting = null }, title = { Text("归档账户？") },
+            text = { Text("归档后资产总额不再包含这个账户，已有交易记录仍保留。可立即撤销。") },
+            confirmButton = { TextButton(onClick = {
+                viewModel.deleteAccount(account.id) {
+                    scope.launch {
+                        if (snackbarHost.showSnackbar("账户已归档", "撤销") == SnackbarResult.ActionPerformed)
+                            viewModel.restoreAccount(account.id)
+                    }
+                }
+                deleting = null
+            }) { Text("归档") } },
             dismissButton = { TextButton(onClick = { deleting = null }) { Text("取消") } })
     }
+    historyId?.let { id -> AlertDialog(onDismissRequest = { historyId = null },
+        title = { Text("余额校准记录") },
+        text = { Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            checkpoints.filter { it.accountId == id }.forEach { point ->
+                Text("${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(Date(point.occurredAt))} · ${point.reason} · ¥${money(point.balanceCents)}")
+            }
+        } },
+        confirmButton = { TextButton(onClick = { historyId = null }) { Text("关闭") } }) }
     reconcilingId?.let { id ->
         accounts.firstOrNull { it.id == id }?.let { account ->
             ReconciliationDialog(
@@ -270,10 +337,11 @@ private fun ReconciliationDialog(
 }
 
 @Composable
-private fun BalanceDialog(account: AccountEntity?, onDismiss: () -> Unit, onSave: (String, String, Long) -> Unit) {
+private fun BalanceDialog(account: AccountEntity?, onDismiss: () -> Unit, onSave: (String, String, Long, String) -> Unit) {
     var name by remember(account) { mutableStateOf(account?.name.orEmpty()) }
     var kind by remember(account) { mutableStateOf(account?.kind ?: "BANK") }
     var balance by remember(account) { mutableStateOf(account?.balanceCents?.let(::money).orEmpty()) }
+    var reason by remember(account) { mutableStateOf("") }
     val cents = remember(balance) { parseMoney(balance) }
     AlertDialog(onDismissRequest = onDismiss,
         title = { Text(if (account == null) "添加账户" else "更新余额") },
@@ -295,9 +363,11 @@ private fun BalanceDialog(account: AccountEntity?, onDismiss: () -> Unit, onSave
                 }
                 OutlinedTextField(value = balance, onValueChange = { balance = it }, label = { Text(if (kind == "FUND") "当前市值（元）" else "当前余额（元）") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
+                if (account != null) OutlinedTextField(value = reason, onValueChange = { reason = it.take(100) },
+                    label = { Text("校准原因（可选）") }, modifier = Modifier.fillMaxWidth())
             }
         },
-        confirmButton = { TextButton(onClick = { onSave(name, kind, cents ?: 0) },
+        confirmButton = { TextButton(onClick = { onSave(name, kind, cents ?: 0, reason) },
             enabled = (account != null || name.isNotBlank()) && cents != null) { Text("保存") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
 }

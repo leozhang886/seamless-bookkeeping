@@ -6,6 +6,12 @@ import com.bookkeeping.app.data.local.entity.TransactionType
 import java.math.BigDecimal
 
 internal fun transferRoute(transaction: TransactionEntity): String? {
+    if (transaction.relationKind == "TRANSFER_OUT") {
+        val amount = "¥${BigDecimal.valueOf(transaction.amountCents, 2).toPlainString()}"
+        return if (transaction.relatedTransactionId == null)
+            "${transaction.account ?: "账户"} −$amount → 基金（市值手动更新）"
+        else "${transaction.account ?: "转出账户"} −$amount → ${transaction.merchant} +$amount"
+    }
     if (transaction.source !in setOf(TransactionSource.BANK_PDF.name, TransactionSource.BANK_SMS.name,
             TransactionSource.BANK_APP.name) ||
         transaction.type != TransactionType.TRANSFER.name) return null

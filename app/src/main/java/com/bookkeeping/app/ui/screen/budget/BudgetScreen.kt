@@ -39,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.bookkeeping.app.data.local.entity.TransactionCategory
+import java.math.BigDecimal
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -122,11 +123,11 @@ fun BudgetScreen(viewModel: BudgetViewModel = hiltViewModel()) {
     if (showEditTotal) {
         EditBudgetDialog(
             title = "设置月预算",
-            initialYuan = budget.monthlyTotalCents / 100.0,
+            initialCents = budget.monthlyTotalCents,
             pickCategory = false,
             onDismiss = { showEditTotal = false },
-            onConfirm = { _, yuan ->
-                viewModel.setMonthlyTotal(yuan)
+            onConfirm = { _, cents ->
+                viewModel.setMonthlyTotal(cents)
                 showEditTotal = false
             },
         )
@@ -139,8 +140,8 @@ fun BudgetScreen(viewModel: BudgetViewModel = hiltViewModel()) {
             pickCategory = true,
             excludeCategories = budget.perCategory.keys,
             onDismiss = { showAddCategory = false },
-            onConfirm = { cat, yuan ->
-                if (cat != null) viewModel.setCategoryBudget(cat, yuan)
+            onConfirm = { cat, cents ->
+                if (cat != null) viewModel.setCategoryBudget(cat, cents)
                 showAddCategory = false
             },
         )
@@ -150,12 +151,12 @@ fun BudgetScreen(viewModel: BudgetViewModel = hiltViewModel()) {
     editingCategory?.let { cat ->
         EditBudgetDialog(
             title = "${cat.displayName} 预算",
-            initialYuan = (budget.perCategory[cat] ?: 0L) / 100.0,
+            initialCents = budget.perCategory[cat] ?: 0L,
             pickCategory = false,
             initialCategory = cat,
             onDismiss = { editingCategory = null },
-            onConfirm = { _, yuan ->
-                viewModel.setCategoryBudget(cat, yuan)
+            onConfirm = { _, cents ->
+                viewModel.setCategoryBudget(cat, cents)
                 editingCategory = null
             },
         )
@@ -205,7 +206,7 @@ private fun TotalBudgetCard(
                 )
             } else {
                 Text(
-                    text = "¥${"%.2f".format(spentCents / 100.0)} / ¥${"%.2f".format(budgetCents / 100.0)}",
+                    text = "¥${yuan(spentCents)} / ¥${yuan(budgetCents)}",
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -223,8 +224,8 @@ private fun TotalBudgetCard(
                 )
                 Row(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
                     Text(
-                        text = if (overSpent) "已超支 ¥${"%.2f".format((spentCents - budgetCents) / 100.0)}"
-                               else "剩余 ¥${"%.2f".format(remainingCents / 100.0)}",
+                        text = if (overSpent) "已超支 ¥${yuan(spentCents - budgetCents)}"
+                               else "剩余 ¥${yuan(remainingCents)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = if (overSpent) MaterialTheme.colorScheme.error
                                 else MaterialTheme.colorScheme.onPrimaryContainer,
@@ -262,7 +263,7 @@ private fun CategoryBudgetCard(
                     modifier = Modifier.weight(1f),
                 )
                 Text(
-                    text = "¥${"%.2f".format(spentCents / 100.0)} / ¥${"%.2f".format(budgetCents / 100.0)}",
+                    text = "¥${yuan(spentCents)} / ¥${yuan(budgetCents)}",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     color = if (overSpent) MaterialTheme.colorScheme.error
@@ -288,7 +289,7 @@ private fun CategoryBudgetCard(
             )
             if (overSpent) {
                 Text(
-                    text = "已超支 ¥${"%.2f".format((spentCents - budgetCents) / 100.0)}",
+                    text = "已超支 ¥${yuan(spentCents - budgetCents)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(top = 2.dp),
@@ -305,3 +306,5 @@ private fun progressColor(ratio: Float): Color = when {
     ratio < 1.0f -> Color(0xFFFB8C00)  // 橙
     else -> MaterialTheme.colorScheme.error
 }
+
+private fun yuan(cents: Long): String = BigDecimal.valueOf(cents, 2).toPlainString()

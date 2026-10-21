@@ -34,6 +34,59 @@ class TransactionViewModel @Inject constructor(
     private val allTransactions: StateFlow<List<TransactionEntity>> = repository.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    private val _suggestions = MutableStateFlow<List<TransactionRepository.DuplicateSuggestion>>(emptyList())
+    val suggestions: StateFlow<List<TransactionRepository.DuplicateSuggestion>> = _suggestions
+    private val _message = MutableStateFlow("")
+    val message: StateFlow<String> = _message
+
+    fun findDuplicates(id: Long) = viewModelScope.launch {
+        _suggestions.value = repository.suggestDuplicates(id)
+    }
+    fun clearSuggestions() { _suggestions.value = emptyList() }
+    fun linkDuplicate(firstId: Long, secondId: Long) = viewModelScope.launch {
+        _message.value = if (repository.linkDuplicate(firstId, secondId)) "已关联为同一消费，统计只计一次" else "无法关联，请核对金额、时间和余额账户"
+    }
+    fun unlinkDuplicate(id: Long) = viewModelScope.launch {
+        _message.value = if (repository.unlinkDuplicate(id)) "已取消重复关联" else "取消关联失败"
+    }
+    fun createTransfer(fromId: Long, toId: Long?, amountCents: Long, feeCents: Long, note: String) =
+        viewModelScope.launch {
+            _message.value = if (repository.createTransfer(fromId, toId, amountCents, feeCents, note))
+                "转账已记录，账户余额已同步" else "转账失败，请检查账户与金额"
+        }
+    fun remainingReturn(original: TransactionEntity): Long = original.amountCents -
+        allTransactions.value.filter { it.relatedTransactionId == original.id &&
+            it.relationKind in setOf("REFUND", "REIMBURSEMENT") }.sumOf { it.amountCents }
+
+    fun returnCandidates(original: TransactionEntity): List<TransactionEntity> =
+        allTransactions.value.filter { it.type == TransactionType.INCOME.name &&
+            it.relatedTransactionId == null && it.duplicateOfId == null &&
+            it.amountCents <= remainingReturn(original) &&
+            it.timestamp >= original.timestamp && it.timestamp <= original.timestamp + 180L * 86_400_000L }
+            .take(20)
+
+    fun recordReturn(originalId: Long, kind: String, amountCents: Long,
+                     accountId: Long?, note: String) = viewModelScope.launch {
+        _message.value = if (repository.recordReturn(originalId, kind, amountCents, accountId, note))
+            "已关联原支出，统计会按净消费计算" else "保存失败：退款金额可能超过原支出"
+    }
+
+    fun linkExistingReturn(originalId: Long, returnId: Long, kind: String) = viewModelScope.launch {
+        _message.value = if (repository.linkExistingReturn(originalId, returnId, kind))
+            "已关联已导入的退款或报销" else "关联失败，请核对金额与流水状态"
+    }
+
+    fun unlinkReturn(id: Long) = viewModelScope.launch {
+        _message.value = if (repository.unlinkReturn(id)) "已取消退款关联" else "取消关联失败"
+    }
+    fun markOrdinaryIncome(id: Long) = viewModelScope.launch {
+        _message.value = if (repository.markOrdinaryIncome(id)) "已按普通收入计入统计" else "操作失败"
+    }
+    fun restore(id: Long) = viewModelScope.launch {
+        repository.restore(id)
+        _message.value = "已恢复流水"
+    }
+
     // 过滤后用于显示的交易列表 = allTransactions × categoryFilter
     // combine 把两个 Flow 合并：任一变化都触发重新计算
     // 嵌入式类比：两个输入信号通过组合逻辑产生新的输出
@@ -82,8 +135,11 @@ class TransactionViewModel @Inject constructor(
         }
     }
 
-    fun delete(entity: TransactionEntity) {
-        viewModelScope.launch { repository.delete(entity) }
+    fun delete(entity: TransactionEntity, onDeleted: () -> Unit) {
+        viewModelScope.launch {
+            if (repository.delete(entity) > 0) onDeleted()
+            else _message.value = "这笔流水关联了退款或辅助账单，请先取消关联"
+        }
     }
 
     fun editTransaction(

@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.Column
+import java.math.BigDecimal
 
 // 简单日柱状图：横轴是月内日期，纵轴是当日合计金额。
 // 用 Compose Canvas 直接画。
@@ -28,13 +29,14 @@ fun DailyBarChart(
 ) {
     if (dailyTotals.isEmpty()) return
 
-    val maxCents = dailyTotals.maxOfOrNull { it.totalCents }?.coerceAtLeast(1L) ?: 1L
+    val actualMaxCents = dailyTotals.maxOfOrNull { it.totalCents } ?: 0L
+    val maxCents = actualMaxCents.coerceAtLeast(1L)
     val outlineColor = MaterialTheme.colorScheme.outlineVariant
 
     Column(modifier = modifier) {
         // 顶部刻度文字
         Text(
-            text = "最高 ¥${"%.2f".format(maxCents / 100.0)}",
+            text = "最高 ¥${BigDecimal.valueOf(actualMaxCents, 2).toPlainString()}",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 8.dp, bottom = 4.dp),

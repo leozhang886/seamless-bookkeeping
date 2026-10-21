@@ -5,6 +5,7 @@ import androidx.room.Room
 import com.bookkeeping.app.data.local.BookkeepingDatabase
 import com.bookkeeping.app.data.local.dao.TransactionDao
 import com.bookkeeping.app.data.local.dao.AccountDao
+import com.bookkeeping.app.data.local.dao.LedgerMetaDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -30,7 +31,7 @@ object DatabaseModule {
             BookkeepingDatabase.DB_NAME
         )
             .addMigrations(BookkeepingDatabase.MIGRATION_1_2, BookkeepingDatabase.MIGRATION_2_3,
-                BookkeepingDatabase.MIGRATION_3_4)
+                BookkeepingDatabase.MIGRATION_3_4, BookkeepingDatabase.MIGRATION_4_5)
             .build()
     }
 
@@ -39,4 +40,7 @@ object DatabaseModule {
 
     @Provides
     fun provideAccountDao(db: BookkeepingDatabase): AccountDao = db.accountDao()
+
+    @Provides
+    fun provideLedgerMetaDao(db: BookkeepingDatabase): LedgerMetaDao = db.ledgerMetaDao()
 }

@@ -15,6 +15,44 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 class BillImporterTest {
+    @Test fun promotionalRedPacketIsHeldForReviewInsteadOfIncome() {
+        val csv = """支付宝账单
+交易时间,交易对方,商品说明,收/支,金额(元),收/付款方式,交易状态,交易订单号
+2026-10-19 11:00:00,淘宝闪购,淘宝闪购红包,收入,20.00,支付宝余额,交易成功,ALI-GIFT-1
+""".trimIndent()
+        val report = BillImporter.parseReport(ByteArrayInputStream(csv.toByteArray()), "支付宝账单.csv")
+        assertEquals(0, report.records.size)
+        assertEquals(1, report.rejected.size)
+    }
+
+    @Test fun neutralWechatWithdrawalDebitsWalletButNotDestinationBank() {
+        val csv = """微信支付账单
+交易时间,交易类型,交易对方,收/支,金额(元),支付方式,当前状态,交易单号
+2026-10-19 11:00:00,零钱提现,微信支付,/,10.00,建设银行储蓄卡(4562),提现已到账,WX-WD-1
+""".trimIndent()
+        val row = BillImporter.parseReport(ByteArrayInputStream(csv.toByteArray()), "微信账单.csv").records.single()
+        assertEquals(TransactionType.TRANSFER.name, row.type)
+        assertEquals("OUT", row.bankFlow)
+        assertTrue(row.note.contains("[付款账户:微信零钱]"))
+        assertTrue(!row.note.contains("[付款账户:建设银行]"))
+    }
+
+    @Test fun previewReportsRejectedRowsInsteadOfDroppingThemSilently() {
+        val csv = """微信支付账单
+交易时间,交易对方,收/支,金额(元),支付方式,当前状态,交易单号
+2026-10-15 12:00:00,早餐,支出,12.00,零钱,支付成功,WX100
+2026-10-15 13:00:00,未知,支出,坏金额,零钱,支付成功,WX101
+2026-10-15 14:00:00,取消,支出,5.00,零钱,交易关闭,WX102
+""".trimIndent()
+        val report = BillImporter.parseReport(ByteArrayInputStream(csv.toByteArray()), "微信账单.csv")
+        assertEquals(3, report.originalRows)
+        assertEquals(1, report.records.size)
+        assertEquals(1, report.rejected.size)
+        assertEquals(1, report.ignoredRows)
+        assertEquals(1200L, report.amountCents)
+        assertEquals(3, report.records.single().sourceRow)
+    }
+
     @Test fun wechatCsvKeepsOriginalFieldsAndSkipsFailedRows() {
         val csv = """微信支付账单
 交易时间,交易对方,商品,收/支,金额(元),支付方式,当前状态,交易单号,备注

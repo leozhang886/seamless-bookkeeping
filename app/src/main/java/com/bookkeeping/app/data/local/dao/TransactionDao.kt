@@ -1,7 +1,6 @@
 package com.bookkeeping.app.data.local.dao
 
 import androidx.room.Dao
-import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
@@ -16,31 +15,70 @@ import kotlinx.coroutines.flow.Flow
 interface TransactionDao {
 
     // 插入。如果 id 冲突就替换。返回新插入的 id
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(transaction: TransactionEntity): Long
 
     @Update
     suspend fun update(transaction: TransactionEntity)
 
-    @Delete
-    suspend fun delete(transaction: TransactionEntity)
+    @Query("UPDATE transactions SET deletedAt = :time WHERE id = :id AND deletedAt IS NULL")
+    suspend fun softDelete(id: Long, time: Long): Int
+
+    @Query("UPDATE transactions SET deletedAt = NULL WHERE id = :id")
+    suspend fun restore(id: Long)
+
+    @Query("UPDATE transactions SET deletedAt = :time WHERE id = :anchorId OR relatedTransactionId = :anchorId")
+    suspend fun softDeleteTransferGroup(anchorId: Long, time: Long): Int
+
+    @Query("UPDATE transactions SET deletedAt = NULL WHERE id = :anchorId OR relatedTransactionId = :anchorId")
+    suspend fun restoreTransferGroup(anchorId: Long)
+
+    @Query("UPDATE transactions SET deletedAt = :time WHERE importBatchId = :batchId AND deletedAt IS NULL")
+    suspend fun softDeleteBatch(batchId: Long, time: Long): Int
+
+    @Query("SELECT * FROM transactions WHERE importBatchId = :batchId")
+    suspend fun byBatch(batchId: Long): List<TransactionEntity>
+
+    @Query("DELETE FROM transactions")
+    suspend fun clearAll()
+
+    @Query("SELECT * FROM transactions")
+    suspend fun getAllRaw(): List<TransactionEntity>
+
+    @Query("SELECT * FROM transactions WHERE deletedAt IS NULL AND duplicateOfId IS NULL")
+    fun observeActiveForAccounting(): Flow<List<TransactionEntity>>
+
+    @Query("SELECT COALESCE(SUM(amountCents), 0) FROM transactions WHERE relatedTransactionId = :originalId AND relationKind IN ('REFUND', 'REIMBURSEMENT') AND deletedAt IS NULL AND duplicateOfId IS NULL")
+    suspend fun returnedAmount(originalId: Long): Long
+
+    @Query("SELECT COUNT(*) FROM transactions WHERE relatedTransactionId = :originalId AND relationKind IN ('REFUND', 'REIMBURSEMENT') AND deletedAt IS NULL")
+    suspend fun activeReturnCount(originalId: Long): Int
+
+    @Query("SELECT COUNT(*) FROM transactions WHERE duplicateOfId = :primaryId AND deletedAt IS NULL")
+    suspend fun activeDuplicateCount(primaryId: Long): Int
+
+    @Query("SELECT * FROM transactions WHERE relatedTransactionId = :originalId AND relationKind IN ('REFUND', 'REIMBURSEMENT') AND deletedAt IS NULL")
+    suspend fun returnsFor(originalId: Long): List<TransactionEntity>
 
     // 查所有交易，按时间倒序。
     // Flow<List<...>> 表示"响应式":数据库变了，订阅者自动收到新列表。
     // 嵌入式类比：寄存器变化时自动触发中断给上层。
-    @Query("SELECT * FROM transactions ORDER BY timestamp DESC")
+    @Query("SELECT * FROM transactions WHERE deletedAt IS NULL AND (relationKind IS NULL OR relationKind != 'TRANSFER_IN') ORDER BY timestamp DESC")
     fun observeAll(): Flow<List<TransactionEntity>>
 
+    @Query("SELECT * FROM transactions WHERE deletedAt IS NULL ORDER BY timestamp DESC")
+    fun observeBalanceMovements(): Flow<List<TransactionEntity>>
+
     // 查指定时间范围内的（用于"本月"统计等）
-    @Query("SELECT * FROM transactions WHERE timestamp >= :startMs AND timestamp < :endMs ORDER BY timestamp DESC")
+    @Query("SELECT * FROM transactions WHERE deletedAt IS NULL AND duplicateOfId IS NULL AND timestamp >= :startMs AND timestamp < :endMs ORDER BY timestamp DESC")
     fun observeBetween(startMs: Long, endMs: Long): Flow<List<TransactionEntity>>
 
     // 统计某段时间内的总支出（单位:分）。COALESCE 处理"没数据时返回 0 而不是 null"
-    @Query("SELECT COALESCE(SUM(amountCents), 0) FROM transactions WHERE type = 'EXPENSE' AND timestamp >= :startMs AND timestamp < :endMs")
+    @Query("SELECT COALESCE(SUM(amountCents), 0) FROM transactions WHERE deletedAt IS NULL AND duplicateOfId IS NULL AND type = 'EXPENSE' AND (relationKind IS NULL OR relationKind = 'TRANSFER_FEE') AND timestamp >= :startMs AND timestamp < :endMs")
     fun observeTotalExpenseBetween(startMs: Long, endMs: Long): Flow<Long>
 
     // 总收入（单位:分）
-    @Query("SELECT COALESCE(SUM(amountCents), 0) FROM transactions WHERE type = 'INCOME' AND timestamp >= :startMs AND timestamp < :endMs")
+    @Query("SELECT COALESCE(SUM(amountCents), 0) FROM transactions WHERE deletedAt IS NULL AND duplicateOfId IS NULL AND type = 'INCOME' AND relationKind IS NULL AND timestamp >= :startMs AND timestamp < :endMs")
     fun observeTotalIncomeBetween(startMs: Long, endMs: Long): Flow<Long>
 
     @Query("SELECT * FROM transactions WHERE id = :id")
@@ -49,7 +87,7 @@ interface TransactionDao {
     @Query("SELECT * FROM transactions WHERE importKey = :key LIMIT 1")
     suspend fun getByImportKey(key: String): TransactionEntity?
 
-    @Query("SELECT * FROM transactions WHERE amountCents = :amountCents AND type = :type AND timestamp BETWEEN :startMs AND :endMs")
+    @Query("SELECT * FROM transactions WHERE deletedAt IS NULL AND amountCents = :amountCents AND type = :type AND timestamp BETWEEN :startMs AND :endMs")
     suspend fun findNear(amountCents: Long, type: String, startMs: Long, endMs: Long): List<TransactionEntity>
 
     // 用于自动抓取路径去重：在时间窗口内找同来源 + 同金额的记录。

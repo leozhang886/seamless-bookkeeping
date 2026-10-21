@@ -22,7 +22,10 @@ import javax.xml.parsers.DocumentBuilderFactory
 
 /** Reads exported WeChat/Alipay bills on-device. No file is uploaded or retained. */
 object BillImporter {
-    fun parse(input: InputStream, fileName: String): List<TransactionEntity> {
+    fun parse(input: InputStream, fileName: String): List<TransactionEntity> =
+        parseReport(input, fileName).records
+
+    fun parseReport(input: InputStream, fileName: String): BillParseReport {
         val rows = when {
             fileName.endsWith(".csv", true) -> parseCsv(decode(input.readLimited(12_000_000)))
             fileName.endsWith(".xlsx", true) -> parseXlsx(input)
@@ -51,19 +54,41 @@ object BillImporter {
         val orderCol = column("交易单号", "交易订单号")
         val stateCol = column("当前状态", "交易状态")
         val methodCol = column("支付方式", "收/付款方式")
+        val businessTypeCol = column("交易类型")
         val account = if (source == TransactionSource.WECHAT) "微信" else "支付宝"
-        return rows.drop(headerIndex + 1).mapNotNull { row ->
+        val records = mutableListOf<TransactionEntity>()
+        val rejected = mutableListOf<BillRowIssue>()
+        var ignored = 0
+        rows.drop(headerIndex + 1).forEachIndexed { offset, row ->
+            val rowNumber = headerIndex + offset + 2
             fun cell(index: Int) = row.getOrNull(index)?.trim().orEmpty()
-            val timestamp = parseTime(cell(timeCol)) ?: return@mapNotNull null
-            val amount = parseCents(cell(amountCol)) ?: return@mapNotNull null
+            if (row.all { it.isBlank() }) { ignored++; return@forEachIndexed }
+            val timestamp = parseTime(cell(timeCol))
+            if (timestamp == null) {
+                rejected += BillRowIssue(rowNumber, "交易时间无法识别")
+                return@forEachIndexed
+            }
+            val amount = parseCents(cell(amountCol))
+            if (amount == null) {
+                rejected += BillRowIssue(rowNumber, "金额无效或不是正数")
+                return@forEachIndexed
+            }
             val state = cell(stateCol)
-            if (listOf("关闭", "失败", "撤销", "取消", "未付款").any { state.contains(it) }) return@mapNotNull null
+            if (listOf("关闭", "失败", "撤销", "取消", "未付款").any { state.contains(it) }) {
+                ignored++; return@forEachIndexed
+            }
             val product = cell(productCol)
             val merchant = cell(merchantCol).ifBlank { product.ifBlank { "未知" } }
-            if (merchant.contains("合计") || merchant.contains("总计")) return@mapNotNull null
+            if (merchant.contains("合计") || merchant.contains("总计")) { ignored++; return@forEachIndexed }
             val method = cell(methodCol)
-            val rawNote = listOf(product, cell(noteCol), method).filter { it.isNotBlank() }.joinToString(" / ").take(200)
-            val walletAccount = identifiedWalletAccount(source, method)
+            val businessType = cell(businessTypeCol)
+            val rawNote = listOf(businessType, product, cell(noteCol), method)
+                .filter { it.isNotBlank() }.joinToString(" / ").take(200)
+            val walletAccount = when {
+                source == TransactionSource.WECHAT && businessType.contains("零钱提现") -> "微信零钱"
+                source == TransactionSource.WECHAT && businessType.contains("零钱充值") -> "微信零钱"
+                else -> identifiedWalletAccount(source, method)
+            }
             val accountMarker = when {
                 walletAccount != null -> "[付款账户:$walletAccount]"
                 method.isNotBlank() -> "[付款账户:其他方式]"
@@ -72,21 +97,38 @@ object BillImporter {
             val note = if (accountMarker == null) rawNote else
                 listOf(rawNote.take(170), accountMarker).filter { it.isNotBlank() }.joinToString(" / ")
             val direction = cell(directionCol)
-            val transferText = "$merchant $product $rawNote"
+            val transferText = "$merchant $product $rawNote $businessType"
             val transferHint = listOf("零钱充值", "零钱提现", "余额宝转入", "余额宝转出", "信用卡还款")
                 .any { transferText.contains(it) }
             val type = when {
                 transferHint -> TransactionType.TRANSFER
                 direction.contains("收入") -> TransactionType.INCOME
                 direction.contains("支出") -> TransactionType.EXPENSE
-                else -> return@mapNotNull null
+                else -> {
+                    rejected += BillRowIssue(rowNumber, "收支方向无法识别")
+                    return@forEachIndexed
+                }
+            }
+            val ambiguousPromotion =
+                listOf("优惠券", "消费补贴", "立减", "购物红包", "店铺红包", "平台红包", "闪购红包")
+                    .any(transferText::contains) ||
+                    (transferText.contains("红包") && !transferText.contains("现金红包到账") &&
+                        !transferText.contains("余额到账"))
+            if (source == TransactionSource.ALIPAY && type == TransactionType.INCOME && ambiguousPromotion) {
+                rejected += BillRowIssue(rowNumber, "疑似优惠权益，无法确认实际到账，请单独核对")
+                return@forEachIndexed
+            }
+            val relationKind = when {
+                type == TransactionType.INCOME && listOf("退款", "退回", "冲正").any(transferText::contains) -> "REFUND_PENDING"
+                type == TransactionType.INCOME && transferText.contains("报销") -> "REIMBURSEMENT_PENDING"
+                else -> null
             }
             val category = if (type == TransactionType.TRANSFER) TransactionCategory.TRANSFER
                 else CategoryClassifier.classify(merchant, rawNote)
             val order = cell(orderCol)
             val identity = if (order.isNotBlank()) "$source|$order" else
                 "$source|$timestamp|$amount|$type|$merchant|$rawNote"
-            TransactionEntity(
+            records += TransactionEntity(
                 amountCents = amount,
                 type = type.name,
                 category = category.name,
@@ -96,13 +138,19 @@ object BillImporter {
                 account = account,
                 timestamp = timestamp,
                 importKey = sha256(identity),
+                sourceRow = rowNumber,
+                sourceOrderId = order.ifBlank { null },
+                relationKind = relationKind,
                 bankFlow = if (type == TransactionType.TRANSFER) when {
                     direction.contains("收入") -> "IN"
                     direction.contains("支出") -> "OUT"
+                    source == TransactionSource.WECHAT && businessType.contains("零钱提现") -> "OUT"
+                    source == TransactionSource.WECHAT && businessType.contains("零钱充值") -> "IN"
                     else -> null
                 } else null,
             )
         }
+        return BillParseReport(source.name, records, rows.size - headerIndex - 1, ignored, rejected)
     }
 
     private fun identifiedWalletAccount(source: TransactionSource, method: String): String? {

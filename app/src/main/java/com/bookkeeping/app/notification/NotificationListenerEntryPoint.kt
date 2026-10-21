@@ -1,6 +1,8 @@
 package com.bookkeeping.app.notification
 
 import com.bookkeeping.app.data.repository.TransactionRepository
+import com.bookkeeping.app.data.repository.PendingNotificationRepository
+import com.bookkeeping.app.data.settings.SettingsPreferences
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
@@ -15,4 +17,6 @@ import dagger.hilt.components.SingletonComponent
 @InstallIn(SingletonComponent::class)
 interface NotificationListenerEntryPoint {
     fun transactionRepository(): TransactionRepository
+    fun pendingNotificationRepository(): PendingNotificationRepository
+    fun settingsPreferences(): SettingsPreferences
 }

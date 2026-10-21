@@ -180,7 +180,7 @@ private fun TotalCard(totalCents: Long, type: TransactionType) {
                 color = MaterialTheme.colorScheme.onPrimaryContainer
             )
             Text(
-                text = "$sign¥${"%.2f".format(totalCents / 100.0)}",
+                text = "$sign¥${BigDecimal.valueOf(totalCents, 2).toPlainString()}",
                 style = MaterialTheme.typography.displaySmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -212,7 +212,7 @@ private fun CategoryStatRow(stat: CategoryStat, viewingType: TransactionType, on
                     modifier = Modifier.padding(end = 8.dp),
                 )
                 Text(
-                    text = "¥${"%.2f".format(stat.totalCents / 100.0)}",
+                    text = "¥${BigDecimal.valueOf(stat.totalCents, 2).toPlainString()}",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = amountColor,

@@ -19,6 +19,10 @@ import kotlin.math.abs
 
 /** Reads the text table in China Construction Bank's personal account statement. */
 object ConstructionBankPdfImporter {
+    fun parseReport(input: InputStream): BillParseReport {
+        val records = parse(input)
+        return BillParseReport(TransactionSource.BANK_PDF.name, records, records.size, 0, emptyList())
+    }
     private data class Glyph(val x: Float, val y: Float, val text: String)
 
     private class GlyphStripper : PDFTextStripper() {
@@ -109,6 +113,11 @@ object ConstructionBankPdfImporter {
             signedAmount.signum() > 0 -> TransactionType.INCOME
             else -> TransactionType.EXPENSE
         }
+        val relationKind = when {
+            type == TransactionType.INCOME && listOf("退款", "退回", "冲正").any(summary::contains) -> "REFUND_PENDING"
+            type == TransactionType.INCOME && summary.contains("报销") -> "REIMBURSEMENT_PENDING"
+            else -> null
+        }
         val category = if (transfer) TransactionCategory.TRANSFER else CategoryClassifier.classify(merchant, note)
         val identity = listOf("CCB", cardTail, columns[0], date, columns[1], columns[3], columns[4], columns[5], columns[6]).joinToString("|")
         val key = MessageDigest.getInstance("SHA-256").digest(identity.toByteArray(Charsets.UTF_8))
@@ -124,6 +133,7 @@ object ConstructionBankPdfImporter {
             timestamp = timestamp,
             importKey = key,
             bankFlow = if (signedAmount.signum() > 0) "IN" else "OUT",
+            relationKind = relationKind,
         )
     }
 

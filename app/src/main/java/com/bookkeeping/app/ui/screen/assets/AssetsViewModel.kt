@@ -5,9 +5,12 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bookkeeping.app.data.importer.BillImporter
+import com.bookkeeping.app.data.importer.BillParseReport
 import com.bookkeeping.app.data.repository.AccountRepository
 import com.bookkeeping.app.data.repository.TransactionRepository
 import com.bookkeeping.app.data.importer.ConstructionBankPdfImporter
+import com.bookkeeping.app.data.local.entity.ImportBatchEntity
+import com.bookkeeping.app.data.local.entity.BalanceCheckpointEntity
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -18,6 +21,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.security.MessageDigest
 import javax.inject.Inject
 
 @HiltViewModel
@@ -33,6 +37,13 @@ class AssetsViewModel @Inject constructor(
     val message: StateFlow<String> = _message
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy
+    private val _preview = MutableStateFlow<BillPreview?>(null)
+    val preview: StateFlow<BillPreview?> = _preview
+    private val _checkpoints = MutableStateFlow<List<BalanceCheckpointEntity>>(emptyList())
+    val checkpoints: StateFlow<List<BalanceCheckpointEntity>> = _checkpoints
+
+    data class BillPreview(val fileName: String, val report: BillParseReport,
+                           val assessment: TransactionRepository.ImportAssessment)
 
     fun addAccount(name: String, kind: String, balanceCents: Long) {
         viewModelScope.launch {
@@ -41,16 +52,20 @@ class AssetsViewModel @Inject constructor(
         }
     }
 
-    fun updateBalance(id: Long, balanceCents: Long) {
+    fun updateBalance(id: Long, balanceCents: Long, reason: String) {
         viewModelScope.launch {
-            accounts.updateBalance(id, balanceCents)
+            accounts.updateBalance(id, balanceCents, reason.ifBlank { "手动校准" })
             _message.value = "金额已更新"
         }
     }
 
-    fun deleteAccount(id: Long) {
-        viewModelScope.launch { accounts.delete(id) }
+    fun deleteAccount(id: Long, onDeleted: () -> Unit) {
+        viewModelScope.launch {
+            if (accounts.delete(id) > 0) onDeleted()
+        }
     }
+    fun restoreAccount(id: Long) = viewModelScope.launch { accounts.restore(id) }
+    fun loadCheckpoints(id: Long) = viewModelScope.launch { _checkpoints.value = accounts.checkpoints(id) }
 
     fun linkPendingTransaction(transactionId: Long, accountId: Long) {
         viewModelScope.launch {
@@ -59,30 +74,63 @@ class AssetsViewModel @Inject constructor(
         }
     }
 
-    fun importBill(uri: Uri, fileName: String) {
+    fun previewBill(uri: Uri, fileName: String) {
         if (_busy.value) return
         viewModelScope.launch {
             _busy.value = true
             _message.value = "正在读取账单…"
             try {
-                val result = withContext(Dispatchers.IO) {
-                    val bills = context.contentResolver.openInputStream(uri)?.use {
+                val report = withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)?.use {
                         if (fileName.endsWith(".pdf", ignoreCase = true)) {
                             PDFBoxResourceLoader.init(context.applicationContext)
-                            ConstructionBankPdfImporter.parse(it)
-                        } else BillImporter.parse(it, fileName)
+                            ConstructionBankPdfImporter.parseReport(it)
+                        } else BillImporter.parseReport(it, fileName)
                     }
                         ?: throw IllegalArgumentException("无法打开文件")
-                    transactions.importBills(bills)
                 }
-                val pdfNotice = if (fileName.endsWith(".pdf", ignoreCase = true))
-                    "。银行卡付款可能与微信、支付宝账单重复，请核对" else ""
-                _message.value = "识别 ${result.found} 笔，新增 ${result.added} 笔，跳过重复 ${result.duplicates} 笔，更新余额账户 ${result.balancesLinked} 笔，补全方向 ${result.directionsUpdated} 笔，匹配内部转账 ${result.transfers} 笔$pdfNotice"
+                val assessment = withContext(Dispatchers.IO) { transactions.assessImport(report.records) }
+                _preview.value = BillPreview(fileName, report, assessment)
+                _message.value = "文件已读取，尚未写入账本。请核对预览。"
             } catch (error: Exception) {
                 _message.value = "导入失败：${error.message ?: "文件格式不受支持"}"
             } finally {
                 _busy.value = false
             }
+        }
+    }
+
+    fun dismissPreview() { _preview.value = null }
+
+    fun confirmImport() {
+        val selected = _preview.value ?: return
+        if (_busy.value) return
+        viewModelScope.launch {
+            _busy.value = true
+            try {
+                val report = selected.report
+                val fingerprint = MessageDigest.getInstance("SHA-256")
+                    .digest(report.records.joinToString("|") { it.importKey.orEmpty() }.toByteArray())
+                    .joinToString("") { "%02x".format(it) }
+                val batch = ImportBatchEntity(fileName = selected.fileName, source = report.source,
+                    importedAt = System.currentTimeMillis(), originalRows = report.originalRows,
+                    parsedRows = report.records.size, rejectedRows = report.rejected.size,
+                    amountCents = report.amountCents, fingerprint = fingerprint)
+                val result = withContext(Dispatchers.IO) { transactions.importBills(report.records, batch) }
+                _preview.value = null
+                _message.value = "新增 ${result.added} 笔，跳过已导入 ${result.duplicates} 笔。可撤销本批次。"
+            } catch (error: Exception) {
+                _message.value = "导入失败，账本未改动：${error.message ?: "未知错误"}"
+            } finally { _busy.value = false }
+        }
+    }
+
+    fun undoLatestImport() = viewModelScope.launch {
+        val count = transactions.undoLatestImport()
+        _message.value = when {
+            count < 0 -> "本批流水已关联退款或辅助账单，请先取消关联后撤销。"
+            count == 0 -> "没有可撤销的导入"
+            else -> "已撤销最近一批的 $count 笔流水"
         }
     }
 }

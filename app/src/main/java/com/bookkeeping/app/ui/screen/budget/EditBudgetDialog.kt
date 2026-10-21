@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.bookkeeping.app.data.local.entity.TransactionCategory
+import java.math.BigDecimal
 
 // 编辑预算对话框
 // pickCategory = true：选分类 + 输金额；false：仅输金额（用于总预算）
@@ -29,20 +30,22 @@ import com.bookkeeping.app.data.local.entity.TransactionCategory
 @Composable
 fun EditBudgetDialog(
     title: String,
-    initialYuan: Double = 0.0,
+    initialCents: Long = 0L,
     pickCategory: Boolean = false,
     excludeCategories: Set<TransactionCategory> = emptySet(),
     initialCategory: TransactionCategory? = null,
     onDismiss: () -> Unit,
-    onConfirm: (category: TransactionCategory?, yuan: Double) -> Unit,
+    onConfirm: (category: TransactionCategory?, cents: Long) -> Unit,
 ) {
     var amountText by remember {
-        mutableStateOf(if (initialYuan > 0) "%.2f".format(initialYuan) else "")
+        mutableStateOf(if (initialCents > 0) BigDecimal.valueOf(initialCents, 2).toPlainString() else "")
     }
     var selectedCategory by remember { mutableStateOf(initialCategory) }
     var menuExpanded by remember { mutableStateOf(false) }
 
-    val amount = amountText.toDoubleOrNull()
+    val amount = runCatching {
+        BigDecimal(amountText.trim()).movePointRight(2).setScale(0).longValueExact()
+    }.getOrNull()
     val amountValid = amount != null && amount >= 0
     val categoryValid = !pickCategory || selectedCategory != null
 
@@ -100,7 +103,7 @@ fun EditBudgetDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onConfirm(selectedCategory, amount ?: 0.0) },
+                onClick = { onConfirm(selectedCategory, amount ?: 0L) },
                 enabled = amountValid && categoryValid,
             ) { Text("保存") }
         },
