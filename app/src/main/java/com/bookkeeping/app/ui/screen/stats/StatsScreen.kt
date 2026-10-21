@@ -1,5 +1,6 @@
 package com.bookkeeping.app.ui.screen.stats
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,11 +12,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -25,13 +27,24 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.bookkeeping.app.data.local.entity.TransactionCategory
+import com.bookkeeping.app.data.local.entity.TransactionEntity
 import com.bookkeeping.app.data.local.entity.TransactionType
+import java.math.BigDecimal
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,11 +53,29 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
     val totalCents by viewModel.totalCents.collectAsState()
     val viewingType by viewModel.viewingType.collectAsState()
     val dailyTotals by viewModel.dailyTotals.collectAsState()
+    val monthlyTransactions by viewModel.monthlyTransactions.collectAsState()
+    var selectedCategoryName by rememberSaveable { mutableStateOf<String?>(null) }
+    val selectedCategory = selectedCategoryName?.let { TransactionCategory.valueOf(it) }
+    BackHandler(enabled = selectedCategory != null) { selectedCategoryName = null }
 
     Scaffold(topBar = { TopAppBar(
-        title = { Text("本月统计", style = MaterialTheme.typography.headlineSmall) },
+        title = { Text(selectedCategory?.displayName ?: "本月统计", style = MaterialTheme.typography.headlineSmall) },
+        navigationIcon = {
+            if (selectedCategory != null) IconButton(onClick = { selectedCategoryName = null }) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回统计")
+            }
+        },
         colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
     ) }) { innerPadding ->
+        if (selectedCategory != null) {
+            CategoryDetails(
+                category = selectedCategory,
+                viewingType = viewingType,
+                transactions = categoryTransactions(monthlyTransactions, viewingType, selectedCategory),
+                modifier = Modifier.padding(innerPadding),
+            )
+            return@Scaffold
+        }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -121,7 +152,8 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
                     }
                     // 分类明细列表
                     items(stats, key = { it.category.name }) { stat ->
-                        CategoryStatRow(stat = stat, viewingType = viewingType)
+                        CategoryStatRow(stat = stat, viewingType = viewingType,
+                            onClick = { selectedCategoryName = stat.category.name })
                     }
                 }
             }
@@ -158,10 +190,10 @@ private fun TotalCard(totalCents: Long, type: TransactionType) {
 }
 
 @Composable
-private fun CategoryStatRow(stat: CategoryStat, viewingType: TransactionType) {
+private fun CategoryStatRow(stat: CategoryStat, viewingType: TransactionType, onClick: () -> Unit) {
     val amountColor = if (viewingType == TransactionType.INCOME)
         MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -185,6 +217,8 @@ private fun CategoryStatRow(stat: CategoryStat, viewingType: TransactionType) {
                     fontWeight = FontWeight.Bold,
                     color = amountColor,
                 )
+                Icon(Icons.Default.ChevronRight, contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Row(
                 modifier = Modifier
@@ -211,6 +245,58 @@ private fun CategoryStatRow(stat: CategoryStat, viewingType: TransactionType) {
         }
     }
 }
+
+@Composable
+private fun CategoryDetails(
+    category: TransactionCategory,
+    viewingType: TransactionType,
+    transactions: List<TransactionEntity>,
+    modifier: Modifier = Modifier,
+) {
+    val totalCents = transactions.sumOf { it.amountCents }
+    val sign = if (viewingType == TransactionType.INCOME) "+" else "−"
+    val typeLabel = if (viewingType == TransactionType.INCOME) "收入" else "支出"
+    val amountColor = if (viewingType == TransactionType.INCOME)
+        MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        item(key = "summary") {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                Column(Modifier.fillMaxWidth().padding(20.dp)) {
+                    Text("本月$typeLabel · ${category.displayName} · ${transactions.size} 笔",
+                        style = MaterialTheme.typography.labelLarge)
+                    Text("$sign¥${BigDecimal.valueOf(totalCents, 2).toPlainString()}",
+                        style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold,
+                        color = amountColor)
+                }
+            }
+        }
+        items(transactions, key = { it.id }) { transaction ->
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(transaction.merchant.ifBlank { "未填写商户" },
+                            modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                        Text("$sign¥${BigDecimal.valueOf(transaction.amountCents, 2).toPlainString()}",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold, color = amountColor)
+                    }
+                    Text(detailDateFormat.format(Date(transaction.timestamp)),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (transaction.note.isNotBlank()) Text(transaction.note,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+}
+
+private val detailDateFormat = SimpleDateFormat("yyyy年M月d日 HH:mm", Locale.getDefault())
 
 @Composable
 private fun EmptyStats(type: TransactionType) {

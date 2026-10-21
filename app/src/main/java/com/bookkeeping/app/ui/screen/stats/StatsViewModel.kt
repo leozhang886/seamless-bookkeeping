@@ -25,11 +25,14 @@ class StatsViewModel @Inject constructor(
     private val _viewingType = MutableStateFlow(TransactionType.EXPENSE)
     val viewingType: StateFlow<TransactionType> = _viewingType
 
+    private val monthRange = currentMonthRange()
+    val monthlyTransactions = repository.observeBetween(monthRange.first, monthRange.second)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     // 本月按分类聚合后的列表（金额降序）
     val categoryStats: StateFlow<List<CategoryStat>> = run {
-        val (start, end) = currentMonthRange()
         combine(
-            repository.observeBetween(start, end),
+            monthlyTransactions,
             _viewingType,
         ) { transactions, type ->
             // 1. 按 type 过滤
@@ -39,7 +42,7 @@ class StatsViewModel @Inject constructor(
             // 2. 按 category 分组聚合
             val total = filtered.sumOf { it.amountCents }
             filtered
-                .groupBy { runCatching { TransactionCategory.valueOf(it.category) }.getOrDefault(TransactionCategory.OTHER) }
+                .groupBy { it.statCategory() }
                 .map { (cat, list) ->
                     val catTotal = list.sumOf { it.amountCents }
                     CategoryStat(
@@ -60,9 +63,8 @@ class StatsViewModel @Inject constructor(
 
     // 本月每日合计（柱状图用）。无交易的日子填 0
     val dailyTotals: StateFlow<List<DailyTotal>> = run {
-        val (start, end) = currentMonthRange()
         combine(
-            repository.observeBetween(start, end),
+            monthlyTransactions,
             _viewingType,
         ) { transactions, type ->
             val filtered = transactions.filter { it.type == type.name }
@@ -72,7 +74,7 @@ class StatsViewModel @Inject constructor(
             }
             // 计算当月最后一天
             val lastDay = Calendar.getInstance().apply {
-                timeInMillis = start
+                timeInMillis = monthRange.first
             }.getActualMaximum(Calendar.DAY_OF_MONTH)
             (1..lastDay).map { day ->
                 DailyTotal(
