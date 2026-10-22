@@ -8,6 +8,7 @@ import com.bookkeeping.app.data.local.entity.TransactionEntity
 import com.bookkeeping.app.data.repository.AccountRepository
 import com.bookkeeping.app.data.repository.PendingNotificationRepository
 import com.bookkeeping.app.data.settings.SettingsPreferences
+import com.bookkeeping.app.data.settings.ThemeMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -25,6 +26,8 @@ class SettingsViewModel @Inject constructor(
 ) : ViewModel() {
     val autoCaptureEnabled = prefs.observeAutoCaptureEnabled()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+    val themeMode = prefs.observeThemeMode()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThemeMode.SYSTEM)
     val pending = pendingRepository.observePending()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val accounts = accountRepository.observeAll()
@@ -40,6 +43,8 @@ class SettingsViewModel @Inject constructor(
         prefs.setAutoCaptureEnabled(enabled)
         _message.value = if (enabled) "通知会先进入待确认，不会直接改账本或余额。" else "已停止读取新支付通知。"
     }
+
+    fun setThemeMode(mode: ThemeMode) = viewModelScope.launch { prefs.setThemeMode(mode) }
 
     fun loadNearby(id: Long) = viewModelScope.launch { _nearby.value = pendingRepository.nearby(id) }
     fun clearNearby() { _nearby.value = emptyList() }

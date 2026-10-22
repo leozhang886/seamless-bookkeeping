@@ -11,11 +11,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
+import com.bookkeeping.app.ui.theme.formatYuan
 import androidx.compose.foundation.layout.Column
 import java.math.BigDecimal
 
@@ -32,11 +34,12 @@ fun DailyBarChart(
     val actualMaxCents = dailyTotals.maxOfOrNull { it.totalCents } ?: 0L
     val maxCents = actualMaxCents.coerceAtLeast(1L)
     val outlineColor = MaterialTheme.colorScheme.outlineVariant
+    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
 
     Column(modifier = modifier) {
         // 顶部刻度文字
         Text(
-            text = "最高 ¥${BigDecimal.valueOf(actualMaxCents, 2).toPlainString()}",
+            text = "最高 ¥${formatYuan(actualMaxCents)}",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 8.dp, bottom = 4.dp),
@@ -48,6 +51,12 @@ fun DailyBarChart(
                 .height(140.dp)
                 .padding(horizontal = 8.dp)
         ) {
+            val labelPaint = android.graphics.Paint().apply {
+                color = labelColor.toArgb()
+                textSize = 10.sp.toPx()
+                textAlign = android.graphics.Paint.Align.CENTER
+                isAntiAlias = true
+            }
             val n = dailyTotals.size
             val chartW = size.width
             val chartH = size.height - 16.dp.toPx()  // 底部留 16dp 给日期文字
@@ -75,20 +84,8 @@ fun DailyBarChart(
 
                 // 每周一画一次日期标签（1/8/15/22/29...）
                 if ((stat.day - 1) % 7 == 0) {
-                    drawContext.canvas.nativeCanvas.apply {
-                        val paint = android.graphics.Paint().apply {
-                            color = android.graphics.Color.GRAY
-                            textSize = 10.sp.toPx()
-                            textAlign = android.graphics.Paint.Align.CENTER
-                            isAntiAlias = true
-                        }
-                        drawText(
-                            stat.day.toString(),
-                            x + barW / 2f,
-                            size.height,
-                            paint,
-                        )
-                    }
+                    drawContext.canvas.nativeCanvas.drawText(
+                        stat.day.toString(), x + barW / 2f, size.height, labelPaint)
                 }
             }
         }

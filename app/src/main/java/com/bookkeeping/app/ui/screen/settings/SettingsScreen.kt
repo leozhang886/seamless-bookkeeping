@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -18,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -30,6 +32,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -47,6 +52,8 @@ import com.bookkeeping.app.data.local.entity.PendingNotificationEntity
 import com.bookkeeping.app.data.local.entity.TransactionCategory
 import com.bookkeeping.app.data.local.entity.TransactionType
 import com.bookkeeping.app.notification.NotificationListenerHelper
+import com.bookkeeping.app.data.settings.ThemeMode
+import com.bookkeeping.app.ui.theme.formatYuan
 import java.math.BigDecimal
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -54,6 +61,7 @@ import java.math.BigDecimal
 fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
     val context = LocalContext.current
     val autoEnabled by viewModel.autoCaptureEnabled.collectAsState()
+    val themeMode by viewModel.themeMode.collectAsState()
     val pending by viewModel.pending.collectAsState()
     val accounts by viewModel.accounts.collectAsState()
     val nearby by viewModel.nearby.collectAsState()
@@ -79,6 +87,19 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
     ) }) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            item {
+                Text("外观", style = MaterialTheme.typography.titleLarge)
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(ThemeMode.SYSTEM to "跟随系统", ThemeMode.LIGHT to "浅色", ThemeMode.DARK to "深色")
+                        .forEach { (mode, label) ->
+                            FilterChip(selected = themeMode == mode,
+                                onClick = { viewModel.setThemeMode(mode) }, label = { Text(label) })
+                        }
+                }
+            }
+            item { Text("通知与数据", style = MaterialTheme.typography.titleLarge) }
+            if (busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
             item {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -108,20 +129,24 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
                     }
                 }
             }
-            if (message.isNotBlank()) item { Text(message, color = MaterialTheme.colorScheme.primary) }
+            if (message.isNotBlank()) item { Text(message,
+                color = if (message.contains("失败") || message.contains("错误"))
+                    MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
             item { Text("待确认通知 · ${pending.size}", style = MaterialTheme.typography.titleLarge) }
             if (pending.isEmpty()) item { Text("没有待确认通知。定期导入账单仍可独立使用。") }
             items(pending, key = { it.id }) { draft ->
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("${draft.merchant.ifBlank { "待识别交易" }}  ¥${money(draft.amountCents)}",
-                            style = MaterialTheme.typography.titleMedium)
-                        Text(draft.rawText.take(120), style = MaterialTheme.typography.bodySmall)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(onClick = { selected = draft; viewModel.loadNearby(draft.id) }) { Text("核对入账") }
-                            TextButton(onClick = { viewModel.dismiss(draft.id, true) }) { Text("标记重复") }
-                            TextButton(onClick = { viewModel.dismiss(draft.id, false) }) { Text("忽略") }
+                Card(onClick = { selected = draft; viewModel.loadNearby(draft.id) },
+                    modifier = Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(16.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(draft.merchant.ifBlank { "待识别交易" }, style = MaterialTheme.typography.titleMedium)
+                            Text("${draft.source} · 待确认账户与重复流水",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
+                        Text("¥${formatYuan(draft.amountCents)}", style = MaterialTheme.typography.titleMedium)
+                        Icon(Icons.Default.ChevronRight, contentDescription = null)
                     }
                 }
             }
@@ -137,7 +162,7 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
         val cents = parseMoney(amount)
         AlertDialog(onDismissRequest = { selected = null; viewModel.clearNearby() },
             title = { Text("核对通知") },
-            text = { Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
+            text = { Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()).imePadding(),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(draft.rawText, style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(amount, { amount = it }, label = { Text("实际金额（元）") },
@@ -176,6 +201,14 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
                     Text("已有 ${nearby.size} 笔同金额、相近日期的流水：")
                     nearby.take(5).forEach { Text("${it.merchant}  ¥${money(it.amountCents)}  ${it.source}") }
                     Row { Checkbox(checkedNearby, onCheckedChange = { checkedNearby = it }); Text("已核对，确认不是重复") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = {
+                        viewModel.dismiss(draft.id, true); selected = null; viewModel.clearNearby()
+                    }) { Text("标记重复") }
+                    TextButton(onClick = {
+                        viewModel.dismiss(draft.id, false); selected = null; viewModel.clearNearby()
+                    }) { Text("忽略通知") }
                 }
             } },
             confirmButton = { TextButton(onClick = {

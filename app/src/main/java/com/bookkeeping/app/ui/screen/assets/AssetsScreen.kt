@@ -21,10 +21,14 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -41,24 +45,30 @@ import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Savings
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.bookkeeping.app.ui.theme.ForestDark
+import com.bookkeeping.app.ui.theme.LocalFinancePalette
+import com.bookkeeping.app.ui.theme.formatYuan
 import com.bookkeeping.app.data.local.entity.AccountEntity
 import com.bookkeeping.app.data.local.entity.TransactionEntity
+import com.bookkeeping.app.data.local.entity.TransactionCategory
+import com.bookkeeping.app.data.local.entity.TransactionType
 import java.math.BigDecimal
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -67,7 +77,8 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AssetsScreen(viewModel: AssetsViewModel = hiltViewModel()) {
+fun AssetsScreen(onQuickAdd: () -> Unit = {}, onViewBills: () -> Unit = {},
+                 viewModel: AssetsViewModel = hiltViewModel()) {
     val accounts by viewModel.accountList.collectAsState()
     val transactions by viewModel.transactionList.collectAsState()
     val message by viewModel.message.collectAsState()
@@ -82,6 +93,9 @@ fun AssetsScreen(viewModel: AssetsViewModel = hiltViewModel()) {
     var deleting by remember { mutableStateOf<AccountEntity?>(null) }
     var reconcilingId by remember { mutableStateOf<Long?>(null) }
     var historyId by remember { mutableStateOf<Long?>(null) }
+    var amountsHidden by rememberSaveable { mutableStateOf(false) }
+    var showBalanceHelp by rememberSaveable { mutableStateOf(false) }
+    val finance = LocalFinancePalette.current
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             val name = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
@@ -98,36 +112,36 @@ fun AssetsScreen(viewModel: AssetsViewModel = hiltViewModel()) {
     }) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                    colors = CardDefaults.cardColors(containerColor = ForestDark),
+                    colors = CardDefaults.cardColors(containerColor = finance.hero),
                 ) {
-                    Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Text("当前资产总额", style = MaterialTheme.typography.labelLarge, color = Color(0xFFC8DECF))
-                        Text("¥${money(accounts.sumOf { it.balanceCents })}",
+                    Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            Text("当前资产总额", style = MaterialTheme.typography.labelLarge,
+                                color = finance.onHeroMuted, modifier = Modifier.weight(1f))
+                            IconButton(onClick = { amountsHidden = !amountsHidden }) {
+                                Icon(if (amountsHidden) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (amountsHidden) "显示资产金额" else "隐藏资产金额",
+                                    tint = finance.onHero)
+                            }
+                        }
+                        Text(if (amountsHidden) "¥ ••••" else "¥${formatYuan(accounts.sumOf { it.balanceCents })}",
                             style = MaterialTheme.typography.displaySmall,
-                            fontWeight = FontWeight.Bold, color = Color.White)
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            listOf("BANK", "ALIPAY").forEach { kind ->
-                                AssetAmount(kindLabel(kind), accounts.filter { it.kind == kind }.sumOf { it.balanceCents }, Modifier.weight(1f))
-                            }
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            listOf("WECHAT", "FUND").forEach { kind ->
-                                AssetAmount(kindLabel(kind), accounts.filter { it.kind == kind }.sumOf { it.balanceCents }, Modifier.weight(1f))
-                            }
-                        }
+                            fontWeight = FontWeight.Bold, color = finance.onHero)
+                        Text("${accounts.size} 个账户与基金 · 余额由账单和手动校准共同维护",
+                            style = MaterialTheme.typography.bodySmall, color = finance.onHeroMuted)
                     }
                 }
             }
             item {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(onClick = { addAccount = true }, modifier = Modifier.weight(1f)) {
+                    Button(onClick = onQuickAdd, modifier = Modifier.weight(1f)) {
                         Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Text("添加资产", modifier = Modifier.padding(start = 4.dp))
+                        Text("记一笔", modifier = Modifier.padding(start = 4.dp))
                     }
                     OutlinedButton(onClick = { picker.launch(arrayOf("text/*", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/pdf", "application/octet-stream")) },
                         enabled = !busy, modifier = Modifier.weight(1f)) {
@@ -142,22 +156,28 @@ fun AssetsScreen(viewModel: AssetsViewModel = hiltViewModel()) {
                     Text(message, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onPrimaryContainer)
                 }
             }
+            if (busy) item { LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) }
             item {
                 TextButton(onClick = viewModel::undoLatestImport, enabled = !busy,
                     modifier = Modifier.padding(horizontal = 16.dp)) { Text("撤销最近一批导入") }
             }
             item {
-                Text("账户与基金", style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp))
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text("账户与基金", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { addAccount = true }) { Text("添加资产") }
+                }
             }
             if (accounts.isEmpty()) item {
                 Text("还没有资产记录。可添加银行卡、支付宝余额、微信零钱，以及每只支付宝基金的当前市值。",
                     modifier = Modifier.padding(horizontal = 16.dp))
             }
             items(accounts, key = { it.id }) { account ->
+                var moreOpen by remember(account.id) { mutableStateOf(false) }
                 Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             val icon = when (account.kind) {
                                 "BANK" -> Icons.Default.AccountBalance
@@ -169,20 +189,75 @@ fun AssetsScreen(viewModel: AssetsViewModel = hiltViewModel()) {
                             Text("${kindLabel(account.kind)} · ${account.name}",
                                 style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                         }
-                        Text("¥${money(account.balanceCents)}", style = MaterialTheme.typography.headlineSmall,
+                        Text(if (amountsHidden) "¥ ••••" else "¥${formatYuan(account.balanceCents)}",
+                            style = MaterialTheme.typography.headlineSmall,
                             modifier = Modifier.padding(top = 4.dp))
                         Text("余额起点设定于 ${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(Date(account.updatedAt))}",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                             if (account.kind != "FUND") TextButton(onClick = { reconcilingId = account.id }) { Text("对账") }
-                            TextButton(onClick = { historyId = account.id; viewModel.loadCheckpoints(account.id) }) { Text("校准记录") }
                             TextButton(onClick = { editing = account }) { Text(if (account.kind == "FUND") "更新市值" else "更新余额") }
-                            TextButton(onClick = { deleting = account }) { Text("删除") }
+                            androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                            androidx.compose.foundation.layout.Box {
+                                IconButton(onClick = { moreOpen = true }) {
+                                    Icon(Icons.Default.MoreVert, contentDescription = "更多账户操作")
+                                }
+                                DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
+                                    DropdownMenuItem(text = { Text("校准记录") }, onClick = {
+                                        moreOpen = false; historyId = account.id; viewModel.loadCheckpoints(account.id)
+                                    })
+                                    DropdownMenuItem(text = { Text("归档账户") }, onClick = {
+                                        moreOpen = false; deleting = account
+                                    })
+                                }
+                            }
                         }
                     }
                 }
             }
+            val recent = transactions.filter { it.duplicateOfId == null }.take(3)
+            if (recent.isNotEmpty()) {
+                item {
+                    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Text("最近交易", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                        TextButton(onClick = onViewBills) { Text("查看全部") }
+                    }
+                }
+                items(recent, key = { "recent_${it.id}" }) { transaction ->
+                    val amountColor = when (transaction.type) {
+                        TransactionType.INCOME.name -> finance.income
+                        TransactionType.EXPENSE.name -> finance.expense
+                        else -> finance.transfer
+                    }
+                    val sign = when (transaction.type) {
+                        TransactionType.INCOME.name -> "+"
+                        TransactionType.EXPENSE.name -> "−"
+                        else -> "转 "
+                    }
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Text(transaction.merchant.ifBlank {
+                                runCatching { TransactionCategory.valueOf(transaction.category).displayName }
+                                    .getOrDefault("交易")
+                            },
+                                style = MaterialTheme.typography.bodyLarge, maxLines = 1)
+                            Text(SimpleDateFormat("M月d日 HH:mm", Locale.CHINA).format(Date(transaction.timestamp)),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Text(if (amountsHidden) "¥ ••••" else "$sign¥${formatYuan(transaction.amountCents)}",
+                            style = MaterialTheme.typography.titleMedium, color = amountColor)
+                    }
+                }
+            }
             item {
+                TextButton(onClick = { showBalanceHelp = !showBalanceHelp },
+                    modifier = Modifier.padding(horizontal = 16.dp)) { Text(if (showBalanceHelp) "收起余额说明" else "余额如何更新？") }
+            }
+            if (showBalanceHelp) item {
                 Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                     Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -270,14 +345,6 @@ fun AssetsScreen(viewModel: AssetsViewModel = hiltViewModel()) {
                 onLink = { transaction -> viewModel.linkPendingTransaction(transaction.id, account.id) },
             )
         }
-    }
-}
-
-@Composable
-private fun AssetAmount(label: String, cents: Long, modifier: Modifier = Modifier) {
-    Column(modifier) {
-        Text(label, style = MaterialTheme.typography.bodySmall, color = Color(0xFFC8DECF))
-        Text("¥${money(cents)}", style = MaterialTheme.typography.titleMedium, color = Color.White)
     }
 }
 

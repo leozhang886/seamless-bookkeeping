@@ -1,6 +1,7 @@
 package com.bookkeeping.app.ui.screen.transactions
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -15,6 +16,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
@@ -37,14 +40,18 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -55,6 +62,8 @@ import com.bookkeeping.app.data.local.entity.TransactionType
 import com.bookkeeping.app.data.repository.balanceDeltaCents
 import com.bookkeeping.app.data.repository.canLinkBalance
 import com.bookkeeping.app.data.repository.eligibleBalanceAccount
+import com.bookkeeping.app.ui.theme.LocalFinancePalette
+import com.bookkeeping.app.ui.theme.formatYuan
 import java.text.SimpleDateFormat
 import java.math.BigDecimal
 import java.util.Calendar
@@ -65,7 +74,9 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TransactionListScreen(
-    viewModel: TransactionViewModel = hiltViewModel()
+    viewModel: TransactionViewModel = hiltViewModel(),
+    openAddRequest: Boolean = false,
+    onAddOpened: () -> Unit = {},
 ) {
     val transactions by viewModel.displayedTransactions.collectAsState()
     val accounts by viewModel.accountList.collectAsState()
@@ -83,6 +94,12 @@ fun TransactionListScreen(
     var editError by remember { mutableStateOf<String?>(null) }
     var duplicateReview by remember { mutableStateOf<TransactionEntity?>(null) }
     var returnReview by remember { mutableStateOf<TransactionEntity?>(null) }
+    LaunchedEffect(openAddRequest) {
+        if (openAddRequest) {
+            showAddDialog = true
+            onAddOpened()
+        }
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHost) },
@@ -264,7 +281,7 @@ private fun MonthlySummaryCard(
                 color = MaterialTheme.colorScheme.onPrimaryContainer
             )
             Text(
-                text = "${if (balanceCents >= 0) "+" else "−"}¥${BigDecimal.valueOf(balanceCents, 2).abs().toPlainString()}",
+            text = "${if (balanceCents >= 0) "+" else "−"}¥${formatYuan(kotlin.math.abs(balanceCents))}",
                 style = MaterialTheme.typography.displaySmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -277,13 +294,13 @@ private fun MonthlySummaryCard(
             ) {
                 SummaryStat(
                     label = "收入",
-                    amount = "+¥${BigDecimal.valueOf(monthlyIncomeCents, 2).toPlainString()}",
+                    amount = "+¥${formatYuan(monthlyIncomeCents)}",
                     color = MaterialTheme.colorScheme.tertiary,
                     modifier = Modifier.weight(1f)
                 )
                 SummaryStat(
                     label = "支出",
-                    amount = "−¥${BigDecimal.valueOf(monthlyExpenseCents, 2).toPlainString()}",
+                    amount = "−¥${formatYuan(monthlyExpenseCents)}",
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.weight(1f)
                 )
@@ -358,6 +375,11 @@ private fun GroupedTransactionList(
     val groups = remember(transactions) {
         transactions.groupBy { dayKey(it.timestamp) }
     }
+    val refunds = remember(transactions) {
+        transactions.asSequence().filter { it.deletedAt == null && it.duplicateOfId == null &&
+            it.relationKind in setOf("REFUND", "REIMBURSEMENT") && it.type == TransactionType.INCOME.name }
+            .groupBy { it.relatedTransactionId }.mapValues { (_, rows) -> rows.sumOf { it.amountCents } }
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -367,7 +389,7 @@ private fun GroupedTransactionList(
         groups.forEach { (dayKey, dayItems) ->
             // 每组的头部：日期 + 当日合计
             item(key = "header_$dayKey") {
-                DayHeader(dayKey = dayKey, items = dayItems)
+                DayHeader(dayKey = dayKey, items = dayItems, refunds = refunds)
             }
             // 该组内的交易项
             items(dayItems, key = { it.id }) { tx ->
@@ -384,8 +406,8 @@ private fun GroupedTransactionList(
 }
 
 @Composable
-private fun DayHeader(dayKey: String, items: List<TransactionEntity>) {
-    val expense = items.filter { it.duplicateOfId == null && it.type == TransactionType.EXPENSE.name }.sumOf { it.amountCents }
+private fun DayHeader(dayKey: String, items: List<TransactionEntity>, refunds: Map<Long?, Long>) {
+    val expense = dailyExpenseCents(items, refunds)
     val income = items.filter { it.duplicateOfId == null && it.relationKind !in
         setOf("REFUND", "REIMBURSEMENT", "REFUND_PENDING", "REIMBURSEMENT_PENDING") &&
         it.type == TransactionType.INCOME.name }.sumOf { it.amountCents }
@@ -405,7 +427,7 @@ private fun DayHeader(dayKey: String, items: List<TransactionEntity>) {
         )
         if (income > 0) {
             Text(
-                text = "+¥${BigDecimal.valueOf(income, 2).toPlainString()}",
+                text = "+¥${formatYuan(income)}",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.tertiary,
                 modifier = Modifier.padding(end = 12.dp)
@@ -413,13 +435,18 @@ private fun DayHeader(dayKey: String, items: List<TransactionEntity>) {
         }
         if (expense > 0) {
             Text(
-                text = "−¥${BigDecimal.valueOf(expense, 2).toPlainString()}",
+                text = "−¥${formatYuan(expense)}",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.error
             )
         }
     }
 }
+
+internal fun dailyExpenseCents(items: List<TransactionEntity>, refunds: Map<Long?, Long>): Long =
+    items.filter { it.deletedAt == null && it.duplicateOfId == null &&
+        it.type == TransactionType.EXPENSE.name }
+        .sumOf { (it.amountCents - (refunds[it.id] ?: 0L)).coerceAtLeast(0L) }
 
 @Composable
 private fun TransactionItem(
@@ -436,81 +463,105 @@ private fun TransactionItem(
 ) {
     val type = runCatching { TransactionType.valueOf(transaction.type) }.getOrDefault(TransactionType.EXPENSE)
     val category = runCatching { TransactionCategory.valueOf(transaction.category) }.getOrDefault(TransactionCategory.OTHER)
-    val amount = BigDecimal.valueOf(transaction.amountCents, 2).toPlainString()
+    val amount = formatYuan(transaction.amountCents)
     val route = transferRoute(transaction)
+    val title = if (route == null) transaction.merchant.ifBlank { category.displayName } else when {
+        transaction.note.contains("基金赎回") && transaction.bankFlow == "IN" -> "基金 → ${transaction.account ?: "银行卡"}"
+        transaction.bankFlow == "IN" -> "${transaction.merchant.ifBlank { "转出账户" }} → ${transaction.account ?: "银行卡"}"
+        else -> "${transaction.account ?: "银行卡"} → ${transaction.merchant.ifBlank { "转入账户" }}"
+    }
+    val transferSign = when (transaction.bankFlow) { "IN" -> "+"; "OUT" -> "−"; else -> "转 " }
+    val finance = LocalFinancePalette.current
+    var expanded by rememberSaveable(transaction.id) { mutableStateOf(false) }
     val sign = when (type) {
         TransactionType.INCOME -> "+"
         TransactionType.EXPENSE -> "−"
         TransactionType.TRANSFER -> ""
     }
-    val amountColor = when (type) {
-        TransactionType.INCOME -> MaterialTheme.colorScheme.tertiary
-        TransactionType.EXPENSE -> MaterialTheme.colorScheme.error
-        TransactionType.TRANSFER -> MaterialTheme.colorScheme.onSurfaceVariant
+    val amountColor = when {
+        transaction.relationKind in setOf("REFUND", "REIMBURSEMENT") -> finance.refund
+        transaction.relationKind in setOf("REFUND_PENDING", "REIMBURSEMENT_PENDING") -> finance.warning
+        type == TransactionType.INCOME -> finance.income
+        type == TransactionType.EXPENSE -> finance.expense
+        else -> finance.transfer
+    }
+    val linked = accounts.firstOrNull { it.id == transaction.balanceAccountId }
+    val status = when {
+        transaction.duplicateOfId != null -> "辅助流水 · 不重复统计"
+        transaction.relationKind in setOf("REFUND_PENDING", "REIMBURSEMENT_PENDING") -> "退款/报销待核对"
+        transaction.relationKind in setOf("REFUND", "REIMBURSEMENT") -> "已关联原支出"
+        canLinkBalance(transaction) && linked == null && !transaction.balanceIgnored -> "余额待核对"
+        else -> null
     }
 
-    Card(modifier = Modifier.fillMaxWidth(),
+    Card(modifier = Modifier.fillMaxWidth(), onClick = { expanded = !expanded },
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(Modifier.padding(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = category.displayName +
-                        if (transaction.merchant.isNotBlank()) " · ${transaction.merchant}" else "",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f),
-                )
-                if (route == null) Text(
-                    text = if (type == TransactionType.TRANSFER) "转 ¥$amount" else "$sign¥$amount",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = amountColor,
-                )
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(Modifier.size(40.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                    contentAlignment = Alignment.Center) {
+                    Text(category.displayName.take(1), style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(title,
+                        style = MaterialTheme.typography.titleMedium, maxLines = 2,
+                        overflow = TextOverflow.Ellipsis)
+                    Text(listOfNotNull(category.displayName.takeIf { route == null && transaction.merchant.isNotBlank() },
+                        linked?.name ?: transaction.account, timeOnlyFormat.format(Date(transaction.timestamp)))
+                        .joinToString(" · "), style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis)
+                }
+                Text(if (route != null) "$transferSign¥$amount" else "$sign¥$amount",
+                    style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
+                    color = amountColor, textAlign = TextAlign.End, maxLines = 2)
             }
-            if (route != null) Text(route, style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
-            if (transaction.note.isNotBlank()) Text(transaction.note,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (transaction.duplicateOfId != null) {
-                TextButton(onClick = onUnlinkDuplicate) { Text("同一消费的辅助流水 · 不重复统计（取消关联）") }
-            } else if (transaction.importKey != null && transaction.type != TransactionType.TRANSFER.name) {
-                TextButton(onClick = onDuplicateReview) { Text("核对其他账单是否重复") }
-            }
-            if (transaction.relationKind in setOf("REFUND", "REIMBURSEMENT")) {
-                TextButton(onClick = onUnlinkReturn) { Text("已关联原支出 · 不算普通收入（取消关联）") }
-            } else if (transaction.relationKind in setOf("REFUND_PENDING", "REIMBURSEMENT_PENDING")) {
-                Text("退款/报销待关联原支出 · 暂不计普通收入", style = MaterialTheme.typography.bodySmall)
-                TextButton(onClick = onMarkOrdinaryIncome) { Text("这其实是普通收入") }
-            } else if (transaction.type == TransactionType.EXPENSE.name && transaction.duplicateOfId == null) {
-                TextButton(onClick = onReturnReview) { Text("关联退款/报销") }
-            }
-            if (canLinkBalance(transaction)) {
-                val linked = accounts.firstOrNull { it.id == transaction.balanceAccountId }
-                if (linked != null && transaction.timestamp <= linked.updatedAt) {
-                    Text("已包含在新设定的余额中", style = MaterialTheme.typography.labelSmall)
-                } else if (transaction.balanceIgnored) {
-                    TextButton(onClick = onReview) { Text("已标记不计入（点此更改）") }
-                } else if (linked == null && accounts.isNotEmpty() &&
-                    accounts.none { eligibleBalanceAccount(it, transaction) }) {
-                    Text("没有可匹配的余额账户，或交易早于余额起点", style = MaterialTheme.typography.labelSmall)
-                } else {
-                    TextButton(onClick = onReview) {
-                        Text(if (linked == null) "余额待核对" else "已计入余额 · ${linked.name}（点此更改）")
+            if (status != null) Text(status, style = MaterialTheme.typography.labelSmall,
+                color = if (status.contains("待核对")) finance.warning else MaterialTheme.colorScheme.onSurfaceVariant)
+            if (expanded) {
+                if (route != null) Text(route, style = MaterialTheme.typography.bodySmall,
+                    color = finance.transfer)
+                if (transaction.note.isNotBlank()) Text(transaction.note,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (transaction.duplicateOfId != null) {
+                    TextButton(onClick = onUnlinkDuplicate) { Text("取消重复关联") }
+                } else if (transaction.importKey != null && type != TransactionType.TRANSFER) {
+                    TextButton(onClick = onDuplicateReview) { Text("核对其他账单是否重复") }
+                }
+                if (transaction.relationKind in setOf("REFUND", "REIMBURSEMENT")) {
+                    TextButton(onClick = onUnlinkReturn) { Text("取消退款/报销关联") }
+                } else if (transaction.relationKind in setOf("REFUND_PENDING", "REIMBURSEMENT_PENDING")) {
+                    TextButton(onClick = onMarkOrdinaryIncome) { Text("这其实是普通收入") }
+                } else if (type == TransactionType.EXPENSE && transaction.duplicateOfId == null) {
+                    TextButton(onClick = onReturnReview) { Text("关联退款/报销") }
+                }
+                if (canLinkBalance(transaction)) {
+                    when {
+                        linked != null && transaction.timestamp <= linked.updatedAt ->
+                            Text("已包含在新设定的余额中", style = MaterialTheme.typography.bodySmall)
+                        transaction.balanceIgnored -> TextButton(onClick = onReview) { Text("已标记不计入 · 更改") }
+                        linked == null && accounts.isNotEmpty() &&
+                            accounts.none { eligibleBalanceAccount(it, transaction) } ->
+                            Text("没有可匹配的余额账户，或交易早于余额起点", style = MaterialTheme.typography.bodySmall)
+                        else -> TextButton(onClick = onReview) {
+                            Text(if (linked == null) "核对余额账户" else "已计入 ${linked.name} · 更改")
+                        }
                     }
                 }
-            }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(timeOnlyFormat.format(Date(transaction.timestamp)),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f))
-                IconButton(onClick = onEdit) {
-                    Icon(Icons.Default.Edit, contentDescription = "编辑", tint = MaterialTheme.colorScheme.outline)
-                }
-                IconButton(onClick = onDelete) {
-                    Icon(Icons.Default.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.outline)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(transaction.source, style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f))
+                    IconButton(onClick = onEdit) {
+                        Icon(Icons.Default.Edit, contentDescription = "编辑", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    IconButton(onClick = onDelete) {
+                        Icon(Icons.Default.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }

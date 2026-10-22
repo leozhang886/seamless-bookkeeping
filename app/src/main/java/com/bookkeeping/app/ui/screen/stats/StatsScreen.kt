@@ -2,6 +2,7 @@ package com.bookkeeping.app.ui.screen.stats
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -19,6 +20,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -41,6 +43,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.bookkeeping.app.data.local.entity.TransactionCategory
 import com.bookkeeping.app.data.local.entity.TransactionEntity
 import com.bookkeeping.app.data.local.entity.TransactionType
+import com.bookkeeping.app.ui.theme.formatYuan
 import java.math.BigDecimal
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -111,7 +114,7 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     // 饼图
                     item(key = "pie_chart") {
@@ -180,7 +183,7 @@ private fun TotalCard(totalCents: Long, type: TransactionType) {
                 color = MaterialTheme.colorScheme.onPrimaryContainer
             )
             Text(
-                text = "$sign¥${BigDecimal.valueOf(totalCents, 2).toPlainString()}",
+                text = "$sign¥${formatYuan(totalCents)}",
                 style = MaterialTheme.typography.displaySmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -193,8 +196,7 @@ private fun TotalCard(totalCents: Long, type: TransactionType) {
 private fun CategoryStatRow(stat: CategoryStat, viewingType: TransactionType, onClick: () -> Unit) {
     val amountColor = if (viewingType == TransactionType.INCOME)
         MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error
-    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -212,7 +214,7 @@ private fun CategoryStatRow(stat: CategoryStat, viewingType: TransactionType, on
                     modifier = Modifier.padding(end = 8.dp),
                 )
                 Text(
-                    text = "¥${BigDecimal.valueOf(stat.totalCents, 2).toPlainString()}",
+                    text = "¥${formatYuan(stat.totalCents)}",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = amountColor,
@@ -242,7 +244,8 @@ private fun CategoryStatRow(stat: CategoryStat, viewingType: TransactionType, on
                     modifier = Modifier.padding(start = 8.dp),
                 )
             }
-        }
+        HorizontalDivider(modifier = Modifier.padding(top = 12.dp),
+            color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
 
@@ -268,7 +271,7 @@ private fun CategoryDetails(
                 Column(Modifier.fillMaxWidth().padding(20.dp)) {
                     Text("本月$typeLabel · ${category.displayName} · ${transactions.size} 笔",
                         style = MaterialTheme.typography.labelLarge)
-                    Text("$sign¥${BigDecimal.valueOf(totalCents, 2).toPlainString()}",
+                    Text("$sign¥${formatYuan(totalCents)}",
                         style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold,
                         color = amountColor)
                 }
@@ -280,7 +283,7 @@ private fun CategoryDetails(
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(transaction.merchant.ifBlank { "未填写商户" },
                             modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                        Text("$sign¥${BigDecimal.valueOf(transaction.amountCents, 2).toPlainString()}",
+                        Text("$sign¥${formatYuan(transaction.amountCents)}",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold, color = amountColor)
                     }

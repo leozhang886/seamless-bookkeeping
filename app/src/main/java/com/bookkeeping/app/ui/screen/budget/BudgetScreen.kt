@@ -39,6 +39,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.bookkeeping.app.data.local.entity.TransactionCategory
+import com.bookkeeping.app.ui.theme.LocalFinancePalette
+import com.bookkeeping.app.ui.theme.formatYuan
 import java.math.BigDecimal
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -216,8 +218,7 @@ private fun TotalBudgetCard(
                     progress = { ratio.coerceIn(0f, 1f) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(8.dp)
-                        .padding(vertical = 4.dp),
+                        .height(8.dp),
                     color = progressColor(ratio),
                     trackColor = MaterialTheme.colorScheme.surfaceVariant,
                     drawStopIndicator = {},
@@ -301,10 +302,13 @@ private fun CategoryBudgetCard(
 
 // 进度条颜色：< 80% 主题色，80-100% 黄，> 100% 红
 @Composable
-private fun progressColor(ratio: Float): Color = when {
-    ratio < 0.8f -> MaterialTheme.colorScheme.primary
-    ratio < 1.0f -> Color(0xFFFB8C00)  // 橙
-    else -> MaterialTheme.colorScheme.error
+private fun progressColor(ratio: Float): Color {
+    val finance = LocalFinancePalette.current
+    return when {
+        ratio < 0.8f -> MaterialTheme.colorScheme.primary
+        ratio < 1.0f -> finance.warning
+        else -> finance.expense
+    }
 }
 
-private fun yuan(cents: Long): String = BigDecimal.valueOf(cents, 2).toPlainString()
+private fun yuan(cents: Long): String = formatYuan(cents)

@@ -85,7 +85,7 @@ fun CategoryPieChart(
             }
             if (stats.size > 6) {
                 val restPct = stats.drop(6).sumOf { it.percentage.toDouble() }.toFloat()
-                LegendItem(color = Color.Gray, label = "其他", percentage = restPct)
+                LegendItem(color = MaterialTheme.colorScheme.outline, label = "其余分类", percentage = restPct)
             }
         }
     }

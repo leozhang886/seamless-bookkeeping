@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -17,7 +18,7 @@ import javax.inject.Singleton
 // 顶层属性：app 全局只有一份 settings DataStore
 private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "settings_prefs")
 
-// 全局设置项。目前只放前台保活开关，后续可以扩展。
+// 本地设置项；外观和通知辅助记账开关不影响账本数据。
 @Singleton
 class SettingsPreferences @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -27,6 +28,15 @@ class SettingsPreferences @Inject constructor(
 
     fun observeAutoCaptureEnabled(): Flow<Boolean> =
         context.settingsDataStore.data.map { it[KEY_AUTO_CAPTURE] ?: false }
+
+    fun observeThemeMode(): Flow<ThemeMode> = context.settingsDataStore.data.map { preferences ->
+        runCatching { ThemeMode.valueOf(preferences[KEY_THEME_MODE] ?: ThemeMode.SYSTEM.name) }
+            .getOrDefault(ThemeMode.SYSTEM)
+    }
+
+    suspend fun setThemeMode(mode: ThemeMode) {
+        context.settingsDataStore.edit { it[KEY_THEME_MODE] = mode.name }
+    }
 
     suspend fun setAutoCaptureEnabled(enabled: Boolean) {
         context.settingsDataStore.edit { it[KEY_AUTO_CAPTURE] = enabled }
@@ -45,5 +55,8 @@ class SettingsPreferences @Inject constructor(
     companion object {
         private val KEY_KEEP_ALIVE = booleanPreferencesKey("keep_alive_enabled")
         private val KEY_AUTO_CAPTURE = booleanPreferencesKey("auto_capture_enabled")
+        private val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
     }
 }
+
+enum class ThemeMode { SYSTEM, LIGHT, DARK }

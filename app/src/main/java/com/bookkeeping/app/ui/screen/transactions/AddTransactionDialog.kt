@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
@@ -26,6 +27,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -33,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.MaterialTheme
 import com.bookkeeping.app.data.local.entity.TransactionCategory
 import com.bookkeeping.app.data.local.entity.AccountEntity
 import com.bookkeeping.app.data.local.entity.TransactionEntity
@@ -71,6 +74,8 @@ fun AddTransactionDialog(
     var accountMenuExpanded by remember { mutableStateOf(false) }
     var selectedAccountId by remember(transaction?.id) { mutableStateOf(transaction?.balanceAccountId?.takeIf { id -> accounts.any { it.id == id } }) }
     var voiceStatus by remember { mutableStateOf<String?>(null) }
+    var submitting by remember(transaction?.id) { mutableStateOf(false) }
+    LaunchedEffect(errorMessage) { if (errorMessage != null) submitting = false }
     val transfer = transaction?.type == TransactionType.TRANSFER.name
     val linkedReturn = transaction?.relationKind in setOf("REFUND", "REIMBURSEMENT")
     val availableAccounts = if (transaction == null) accounts.filter { it.kind != "FUND" } else
@@ -115,26 +120,9 @@ fun AddTransactionDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (transaction == null) "新建账单" else "编辑账单") },
         text = {
-            Column(modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+            Column(modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()).imePadding(),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (errorMessage != null) Text(errorMessage)
-                if (!transfer && !linkedReturn) TextButton(onClick = {
-                    voiceStatus = null
-                    val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                        putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
-                        putExtra(RecognizerIntent.EXTRA_PROMPT, "例如：午饭花了二十五块五")
-                    }
-                    try {
-                        voiceLauncher.launch(intent)
-                    } catch (_: ActivityNotFoundException) {
-                        voiceStatus = "手机没有可用的语音识别服务，请手动填写。"
-                    } catch (_: SecurityException) {
-                        voiceStatus = "语音识别服务无法启动，请检查手机设置。"
-                    }
-                }) { Text("🎙 语音输入") }
-                if (!transfer && !linkedReturn) Text("语音由手机的识别服务处理，保存前请核对。")
-                voiceStatus?.let { Text(it) }
+                if (errorMessage != null) Text(errorMessage, color = MaterialTheme.colorScheme.error)
                 // 收入 / 支出 切换
                 if (transfer) Text("转账方向沿用原流水；修改金额会同步改变转入账户，手续费不变。")
                 else if (linkedReturn) Text("这笔款项已关联原支出；只能调整金额和说明。")
@@ -154,12 +142,30 @@ fun AddTransactionDialog(
                 OutlinedTextField(
                     value = amountText,
                     onValueChange = { amountText = it.filter { c -> c.isDigit() || c == '.' } },
-                    label = { Text("金额（元）") },
+                    label = { Text("金额") },
+                    prefix = { Text("¥") },
+                    textStyle = MaterialTheme.typography.headlineMedium,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     singleLine = true,
                     isError = amountText.isNotEmpty() && !amountValid,
                     modifier = Modifier.fillMaxWidth()
                 )
+                if (!transfer && !linkedReturn) TextButton(onClick = {
+                    voiceStatus = null
+                    val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
+                        putExtra(RecognizerIntent.EXTRA_PROMPT, "例如：午饭花了二十五块五")
+                    }
+                    try {
+                        voiceLauncher.launch(intent)
+                    } catch (_: ActivityNotFoundException) {
+                        voiceStatus = "手机没有可用的语音识别服务，请手动填写。"
+                    } catch (_: SecurityException) {
+                        voiceStatus = "语音识别服务无法启动，请检查手机设置。"
+                    }
+                }) { Text("语音输入") }
+                voiceStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
 
                 // 分类下拉
                 ExposedDropdownMenuBox(
@@ -244,9 +250,10 @@ fun AddTransactionDialog(
             TextButton(
                 onClick = {
                     val amount = cents ?: return@TextButton
+                    submitting = true
                     onConfirm(amount, selectedType, selectedCategory, merchant, note, selectedAccountId)
                 },
-                enabled = amountValid
+                enabled = amountValid && !submitting
             ) { Text("保存") }
         },
         dismissButton = {
