@@ -58,6 +58,7 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
     val dailyTotals by viewModel.dailyTotals.collectAsState()
     val monthlyTransactions by viewModel.monthlyTransactions.collectAsState()
     var selectedCategoryName by rememberSaveable { mutableStateOf<String?>(null) }
+    var sortAscending by rememberSaveable { mutableStateOf(false) }
     val selectedCategory = selectedCategoryName?.let { TransactionCategory.valueOf(it) }
     BackHandler(enabled = selectedCategory != null) { selectedCategoryName = null }
 
@@ -109,6 +110,8 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
             if (stats.isEmpty()) {
                 EmptyStats(type = viewingType)
             } else {
+                val sortedStats = if (sortAscending) stats.sortedBy { it.totalCents }
+                    else stats.sortedByDescending { it.totalCents }
                 val barColor = if (viewingType == TransactionType.INCOME)
                     MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error
                 LazyColumn(
@@ -154,7 +157,27 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
                         }
                     }
                     // 分类明细列表
-                    items(stats, key = { it.category.name }) { stat ->
+                    item(key = "sort_controls") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("分类排行", modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.titleSmall)
+                            FilterChip(
+                                selected = !sortAscending,
+                                onClick = { sortAscending = false },
+                                label = { Text("金额降序") },
+                            )
+                            FilterChip(
+                                selected = sortAscending,
+                                onClick = { sortAscending = true },
+                                label = { Text("金额升序") },
+                            )
+                        }
+                    }
+                    items(sortedStats, key = { it.category.name }) { stat ->
                         CategoryStatRow(stat = stat, viewingType = viewingType,
                             onClick = { selectedCategoryName = stat.category.name })
                     }
