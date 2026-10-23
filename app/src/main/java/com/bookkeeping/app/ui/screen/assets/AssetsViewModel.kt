@@ -31,6 +31,8 @@ class AssetsViewModel @Inject constructor(
     private val transactions: TransactionRepository,
 ) : ViewModel() {
     val accountList = accounts.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val archivedAccounts = accounts.observeArchived().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val importBatches = transactions.observeImportBatches().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val transactionList = transactions.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     private val _message = MutableStateFlow("")
@@ -45,39 +47,51 @@ class AssetsViewModel @Inject constructor(
     data class BillPreview(val fileName: String, val report: BillParseReport,
                            val assessment: TransactionRepository.ImportAssessment)
 
-    fun addAccount(name: String, kind: String, balanceCents: Long) {
+    private fun change(onResult: (Boolean) -> Unit = {}, block: suspend () -> Unit) {
+        if (_busy.value) { onResult(false); return }
+        _busy.value = true
         viewModelScope.launch {
-            accounts.add(name.trim(), kind, balanceCents)
-            _message.value = "资产已添加。金额以你填写的数值为准。"
+            try { block(); onResult(true) }
+            catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+            catch (e: Exception) { _message.value = "操作失败：${e.message ?: "请重试"}"; onResult(false) }
+            finally { _busy.value = false }
         }
     }
-
-    fun updateBalance(id: Long, balanceCents: Long, reason: String) {
-        viewModelScope.launch {
-            accounts.updateBalance(id, balanceCents, reason.ifBlank { "手动校准" })
-            _message.value = "金额已更新"
-        }
+    fun addAccount(name: String, kind: String, balanceCents: Long, onResult: (Boolean) -> Unit = {}) = change(onResult) {
+        accounts.add(name.trim(), kind, balanceCents); _message.value = "资产已添加"
     }
-
-    fun deleteAccount(id: Long, onDeleted: () -> Unit) {
-        viewModelScope.launch {
-            if (accounts.delete(id) > 0) onDeleted()
-        }
+    fun updateBalance(id: Long, balanceCents: Long, reason: String, onResult: (Boolean) -> Unit = {}) = change(onResult) {
+        accounts.updateBalance(id, balanceCents, reason.ifBlank { "手动校准" }); _message.value = "余额已校准，历史流水保留"
     }
-    fun restoreAccount(id: Long) = viewModelScope.launch { accounts.restore(id) }
-    fun loadCheckpoints(id: Long) = viewModelScope.launch { _checkpoints.value = accounts.checkpoints(id) }
-
-    fun linkPendingTransaction(transactionId: Long, accountId: Long) {
-        viewModelScope.launch {
-            if (!transactions.setBalanceAccount(transactionId, accountId))
-                _message.value = "这笔账单无法计入该账户，请到账单页核对。"
-        }
+    fun rename(id: Long, name: String, onResult: (Boolean) -> Unit) = change(onResult) {
+        accounts.rename(id, name); _message.value = "账户名称已更新"
+    }
+    fun deleteAccount(id: Long, onDeleted: () -> Unit) = change {
+        if (accounts.delete(id) > 0) onDeleted()
+    }
+    fun restoreAccount(id: Long) = change { accounts.restore(id); _message.value = "账户已恢复" }
+    fun loadCheckpoints(id: Long) = viewModelScope.launch {
+        runCatching { accounts.checkpoints(id) }.onSuccess { _checkpoints.value = it }
+            .onFailure { _message.value = "读取校准记录失败" }
+    }
+    fun linkPendingTransaction(transactionId: Long, accountId: Long) = change {
+        check(transactions.setBalanceAccount(transactionId, accountId)) { "这笔账单无法计入该账户，请到账单页核对。" }
+    }
+    fun undoImport(id: Long) = change {
+        val count = transactions.undoImport(id)
+        check(count >= 0) { "本批流水已关联退款或辅助账单，请先取消关联" }
+        _message.value = "已撤销 $count 笔流水，可在导入记录中恢复"
+    }
+    fun restoreImport(id: Long) = change {
+        val count = transactions.restoreImport(id)
+        check(count >= 0) { "恢复受阻，请核对原交易及退款额度" }
+        _message.value = "已恢复 $count 笔流水"
     }
 
     fun previewBill(uri: Uri, fileName: String) {
         if (_busy.value) return
+        _busy.value = true
         viewModelScope.launch {
-            _busy.value = true
             _message.value = "正在读取账单…"
             try {
                 val report = withContext(Dispatchers.IO) {
@@ -105,10 +119,11 @@ class AssetsViewModel @Inject constructor(
     fun confirmImport() {
         val selected = _preview.value ?: return
         if (_busy.value) return
+        _busy.value = true
         viewModelScope.launch {
-            _busy.value = true
             try {
                 val report = selected.report
+                require(report.blockingErrors.isEmpty()) { "账单完整性校验未通过，请重新导出原文件" }
                 val fingerprint = MessageDigest.getInstance("SHA-256")
                     .digest(report.records.joinToString("|") { it.importKey.orEmpty() }.toByteArray())
                     .joinToString("") { "%02x".format(it) }
@@ -125,12 +140,4 @@ class AssetsViewModel @Inject constructor(
         }
     }
 
-    fun undoLatestImport() = viewModelScope.launch {
-        val count = transactions.undoLatestImport()
-        _message.value = when {
-            count < 0 -> "本批流水已关联退款或辅助账单，请先取消关联后撤销。"
-            count == 0 -> "没有可撤销的导入"
-            else -> "已撤销最近一批的 $count 笔流水"
-        }
-    }
 }

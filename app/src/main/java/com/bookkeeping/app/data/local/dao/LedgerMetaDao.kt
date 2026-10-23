@@ -8,10 +8,24 @@ import com.bookkeeping.app.data.local.entity.BalanceCheckpointEntity
 import com.bookkeeping.app.data.local.entity.ImportBatchEntity
 import com.bookkeeping.app.data.local.entity.ImportIdentityEntity
 import com.bookkeeping.app.data.local.entity.PendingNotificationEntity
+import com.bookkeeping.app.data.local.entity.BudgetEntryEntity
 import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface LedgerMetaDao {
+    @Query("SELECT * FROM budget_entries") fun observeBudgets(): Flow<List<BudgetEntryEntity>>
+    @Query("SELECT * FROM budget_entries") suspend fun allBudgets(): List<BudgetEntryEntity>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putBudget(entry: BudgetEntryEntity)
+    @Query("DELETE FROM budget_entries") suspend fun clearBudgets()
+    @Query("SELECT * FROM import_batches ORDER BY importedAt DESC")
+    fun observeBatches(): Flow<List<ImportBatchEntity>>
+    @Query("UPDATE import_batches SET undoneAt = NULL WHERE id = :id")
+    suspend fun restoreBatchState(id: Long)
+    @Query("SELECT * FROM import_batches WHERE id = :id") suspend fun batchById(id: Long): ImportBatchEntity?
+    @Query("SELECT * FROM pending_notifications WHERE status != 'PENDING' ORDER BY rawTimestamp DESC LIMIT 100")
+    fun observeProcessedPending(): Flow<List<PendingNotificationEntity>>
+    @Query("UPDATE pending_notifications SET status = 'PENDING' WHERE id = :id AND status IN ('DISMISSED', 'DUPLICATE')")
+    suspend fun reopenPending(id: Long): Int
     @Insert suspend fun insertBatch(batch: ImportBatchEntity): Long
     @Insert suspend fun restoreBatch(batch: ImportBatchEntity)
     @Query("DELETE FROM import_batches WHERE id = :id")
@@ -49,6 +63,8 @@ interface LedgerMetaDao {
     suspend fun pendingById(id: Long): PendingNotificationEntity?
     @Query("UPDATE pending_notifications SET status = :status WHERE id = :id AND status = 'PENDING'")
     suspend fun setPendingStatus(id: Long, status: String): Int
+    @Query("UPDATE pending_notifications SET status = 'CONFIRMED', transactionId = :transactionId WHERE id = :id AND status = 'PENDING'")
+    suspend fun completePending(id: Long, transactionId: Long): Int
     @Query("SELECT * FROM pending_notifications")
     suspend fun allPending(): List<PendingNotificationEntity>
 

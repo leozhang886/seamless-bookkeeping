@@ -31,7 +31,8 @@ object DatabaseModule {
             BookkeepingDatabase.DB_NAME
         )
             .addMigrations(BookkeepingDatabase.MIGRATION_1_2, BookkeepingDatabase.MIGRATION_2_3,
-                BookkeepingDatabase.MIGRATION_3_4, BookkeepingDatabase.MIGRATION_4_5)
+                BookkeepingDatabase.MIGRATION_3_4, BookkeepingDatabase.MIGRATION_4_5,
+                BookkeepingDatabase.MIGRATION_5_6)
             .build()
     }
 

@@ -21,6 +21,11 @@ interface AccountDao {
     @Query("SELECT * FROM accounts WHERE archivedAt IS NULL ORDER BY kind, name")
     fun observeAll(): Flow<List<AccountEntity>>
 
+    @Query("SELECT * FROM accounts WHERE archivedAt IS NOT NULL ORDER BY archivedAt DESC")
+    fun observeArchived(): Flow<List<AccountEntity>>
+    @Query("UPDATE accounts SET name = :name WHERE id = :id")
+    suspend fun rename(id: Long, name: String)
+
     @Insert
     suspend fun insert(account: AccountEntity): Long
 

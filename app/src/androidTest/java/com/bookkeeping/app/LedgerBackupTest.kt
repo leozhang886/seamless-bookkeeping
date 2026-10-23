@@ -29,7 +29,7 @@ class LedgerBackupTest {
                 type = "EXPENSE", category = "FOOD", merchant = "测试商户", source = "MANUAL",
                 timestamp = 2, balanceAccountId = accountId))
             val backup = LedgerBackup(context, db, db.accountDao(), db.transactionDao(),
-                db.ledgerMetaDao(), BudgetPreferences(context))
+                db.ledgerMetaDao(), BudgetPreferences(context, db))
             val uri = Uri.fromFile(file)
             val result = backup.export(uri, "test-password-12345")
             assertEquals(1, result.accounts)

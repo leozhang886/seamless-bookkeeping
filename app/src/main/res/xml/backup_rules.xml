@@ -12,4 +12,5 @@
     <exclude domain="database" path="bookkeeping.db-wal" />
     <!-- 排除 DataStore Preferences（预算设置） -->
     <exclude domain="file" path="datastore/" />
+    <exclude domain="file" path="recovery/" />
 </full-backup-content>

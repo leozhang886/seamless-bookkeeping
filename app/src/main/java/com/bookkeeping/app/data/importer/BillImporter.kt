@@ -14,6 +14,7 @@ import java.nio.charset.CodingErrorAction
 import java.nio.charset.Charset
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
+import java.text.ParsePosition
 import java.util.Calendar
 import java.util.Locale
 import java.util.TimeZone
@@ -55,6 +56,7 @@ object BillImporter {
         val stateCol = column("当前状态", "交易状态")
         val methodCol = column("支付方式", "收/付款方式")
         val businessTypeCol = column("交易类型")
+        val currencyCol = column("币种", "货币")
         val account = if (source == TransactionSource.WECHAT) "微信" else "支付宝"
         val records = mutableListOf<TransactionEntity>()
         val rejected = mutableListOf<BillRowIssue>()
@@ -63,6 +65,10 @@ object BillImporter {
             val rowNumber = headerIndex + offset + 2
             fun cell(index: Int) = row.getOrNull(index)?.trim().orEmpty()
             if (row.all { it.isBlank() }) { ignored++; return@forEachIndexed }
+            if (cell(currencyCol).isNotBlank() && cell(currencyCol).uppercase(Locale.ROOT) !in setOf("人民币", "CNY", "RMB")) {
+                rejected += BillRowIssue(rowNumber, "仅支持人民币账单，请核对币种")
+                return@forEachIndexed
+            }
             val timestamp = parseTime(cell(timeCol))
             if (timestamp == null) {
                 rejected += BillRowIssue(rowNumber, "交易时间无法识别")
@@ -79,7 +85,7 @@ object BillImporter {
             }
             val product = cell(productCol)
             val merchant = cell(merchantCol).ifBlank { product.ifBlank { "未知" } }
-            if (merchant.contains("合计") || merchant.contains("总计")) { ignored++; return@forEachIndexed }
+            if (merchant in setOf("合计", "总计")) { ignored++; return@forEachIndexed }
             val method = cell(methodCol)
             val businessType = cell(businessTypeCol)
             val rawNote = listOf(businessType, product, cell(noteCol), method)
@@ -98,8 +104,9 @@ object BillImporter {
                 listOf(rawNote.take(170), accountMarker).filter { it.isNotBlank() }.joinToString(" / ")
             val direction = cell(directionCol)
             val transferText = "$merchant $product $rawNote $businessType"
-            val transferHint = listOf("零钱充值", "零钱提现", "余额宝转入", "余额宝转出", "信用卡还款")
-                .any { transferText.contains(it) }
+            val transferHint = !listOf("手续费", "利息", "服务费").any(transferText::contains) &&
+                listOf("零钱充值", "零钱提现", "余额宝转入", "余额宝转出", "信用卡还款",
+                    "基金申购", "基金购买", "基金赎回", "买入基金", "卖出基金").any(transferText::contains)
             val type = when {
                 transferHint -> TransactionType.TRANSFER
                 direction.contains("收入") -> TransactionType.INCOME
@@ -141,13 +148,20 @@ object BillImporter {
                 sourceRow = rowNumber,
                 sourceOrderId = order.ifBlank { null },
                 relationKind = relationKind,
-                bankFlow = if (type == TransactionType.TRANSFER) when {
+                sourcePaymentMethod = method.replace(Regex("\\d{6,}"), "****"),
+                sourceAccountKind = when (walletAccount) { "支付宝余额" -> "ALIPAY"; "微信零钱" -> "WECHAT"; else -> "OTHER" },
+                rawData = listOf(cell(timeCol), direction, cell(amountCol), merchant, businessType, product, method, state)
+                    .joinToString("\u001F").take(1800).replace(Regex("\\d{6,}"), "****"),
+                parserVersion = 2,
+                bankFlow = when {
                     direction.contains("收入") -> "IN"
                     direction.contains("支出") -> "OUT"
                     source == TransactionSource.WECHAT && businessType.contains("零钱提现") -> "OUT"
                     source == TransactionSource.WECHAT && businessType.contains("零钱充值") -> "IN"
+                    transferHint && listOf("基金申购", "基金购买", "买入基金", "余额宝转入").any(transferText::contains) -> "OUT"
+                    transferHint && listOf("基金赎回", "卖出基金", "余额宝转出").any(transferText::contains) -> "IN"
                     else -> null
-                } else null,
+                },
             )
         }
         return BillParseReport(source.name, records, rows.size - headerIndex - 1, ignored, rejected)
@@ -173,8 +187,12 @@ object BillImporter {
     private fun parseTime(value: String): Long? {
         val text = value.trim()
         for (pattern in listOf("yyyy-MM-dd HH:mm:ss", "yyyy/MM/dd HH:mm:ss", "yyyy-MM-dd HH:mm", "yyyy/MM/dd HH:mm")) {
-            val format = SimpleDateFormat(pattern, Locale.CHINA).apply { isLenient = false }
-            runCatching { format.parse(text) }.getOrNull()?.let { return it.time }
+            val format = SimpleDateFormat(pattern, Locale.CHINA).apply {
+                isLenient = false; timeZone = TimeZone.getTimeZone("Asia/Shanghai")
+            }
+            val position = ParsePosition(0)
+            val parsed = format.parse(text, position)
+            if (parsed != null && position.index == text.length) return parsed.time
         }
         val serial = text.toDoubleOrNull() ?: return null
         if (serial < 20_000 || serial > 100_000) return null
@@ -211,6 +229,7 @@ object BillImporter {
             }
             i++
         }
+        require(!quoted) { "CSV 引号不完整，请重新导出原始账单" }
         if (cell.isNotEmpty() || row.isNotEmpty()) { row.add(cell.toString()); rows.add(row) }
         return rows
     }
@@ -218,16 +237,25 @@ object BillImporter {
     private fun parseXlsx(input: InputStream): List<List<String>> {
         var shared = emptyList<String>()
         var sheet: ByteArray? = null
+        var entries = 0
+        var totalBytes = 0
         ZipInputStream(input).use { zip ->
             while (true) {
                 val entry = zip.nextEntry ?: break
+                require(++entries <= 200) { "XLSX 文件条目过多" }
+                val content = zip.readLimited(if (entry.name == "xl/worksheets/sheet1.xml") 12_000_000 else 8_000_000)
+                totalBytes += content.size
+                require(totalBytes <= 32_000_000) { "XLSX 解压内容过大" }
                 when (entry.name) {
-                    "xl/sharedStrings.xml" -> shared = xml(zip.readLimited(8_000_000)).getElementsByTagName("si")
+                    "xl/sharedStrings.xml" -> shared = xml(content).getElementsByTagName("si")
                         .let { nodes -> (0 until nodes.length).map { index ->
                             val texts = (nodes.item(index) as Element).getElementsByTagName("t")
                             (0 until texts.length).joinToString("") { texts.item(it).textContent }
                         } }
-                    "xl/worksheets/sheet1.xml" -> sheet = zip.readLimited(12_000_000)
+                    "xl/worksheets/sheet1.xml" -> {
+                        require(sheet == null) { "XLSX 中存在重复账单页" }
+                        sheet = content
+                    }
                 }
                 zip.closeEntry()
             }

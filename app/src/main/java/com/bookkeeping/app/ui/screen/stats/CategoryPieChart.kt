@@ -76,16 +76,12 @@ fun CategoryPieChart(
                 .padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            stats.take(6).forEach { stat ->
+            stats.forEach { stat ->
                 LegendItem(
                     color = categoryColor(stat.category),
                     label = stat.category.displayName,
                     percentage = stat.percentage,
                 )
-            }
-            if (stats.size > 6) {
-                val restPct = stats.drop(6).sumOf { it.percentage.toDouble() }.toFloat()
-                LegendItem(color = MaterialTheme.colorScheme.outline, label = "其余分类", percentage = restPct)
             }
         }
     }

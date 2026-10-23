@@ -1,6 +1,7 @@
 package com.bookkeeping.app.ui.screen.stats
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import com.bookkeeping.app.data.local.entity.TransactionCategory
 import com.bookkeeping.app.data.local.entity.TransactionType
@@ -12,21 +13,33 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import com.bookkeeping.app.ui.components.MonthSelection
+import com.bookkeeping.app.ui.components.ledgerMonthRange
+import com.bookkeeping.app.ui.components.LEDGER_ZONE
+import java.time.Instant
 import java.util.Calendar
 import javax.inject.Inject
 
 // 统计页 ViewModel：本月各分类的支出聚合
 @HiltViewModel
+@OptIn(ExperimentalCoroutinesApi::class)
 class StatsViewModel @Inject constructor(
     private val repository: TransactionRepository,
+    savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
     // 收入还是支出（切换显示哪个方向的统计）
     private val _viewingType = MutableStateFlow(TransactionType.EXPENSE)
     val viewingType: StateFlow<TransactionType> = _viewingType
 
-    private val monthRange = currentMonthRange()
-    val monthlyTransactions = repository.observeBetween(monthRange.first, monthRange.second)
+    val period = MonthSelection(viewModelScope, savedStateHandle)
+    val monthlyTransactions = period.month.flatMapLatest { month ->
+        val range = ledgerMonthRange(month); repository.observeBetween(range.first, range.second)
+    }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     // 本月按分类聚合后的列表（金额降序）
@@ -53,7 +66,7 @@ class StatsViewModel @Inject constructor(
                     )
                 }
                 .sortedByDescending { it.totalCents }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     }
 
     // 本月该方向的总金额（分）
@@ -66,23 +79,21 @@ class StatsViewModel @Inject constructor(
         combine(
             monthlyTransactions,
             _viewingType,
-        ) { transactions, type ->
+            period.month,
+        ) { transactions, type, month ->
             val filtered = transactions.filter { it.type == type.name }
             val byDay = filtered.groupBy {
-                Calendar.getInstance().apply { timeInMillis = it.timestamp }
-                    .get(Calendar.DAY_OF_MONTH)
+                Instant.ofEpochMilli(it.timestamp).atZone(LEDGER_ZONE).dayOfMonth
             }
             // 计算当月最后一天
-            val lastDay = Calendar.getInstance().apply {
-                timeInMillis = monthRange.first
-            }.getActualMaximum(Calendar.DAY_OF_MONTH)
+            val lastDay = month.lengthOfMonth()
             (1..lastDay).map { day ->
                 DailyTotal(
                     day = day,
                     totalCents = byDay[day]?.sumOf { it.amountCents } ?: 0L,
                 )
             }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     }
 
     fun setViewingType(type: TransactionType) {

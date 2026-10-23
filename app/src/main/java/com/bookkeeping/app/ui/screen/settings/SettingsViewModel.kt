@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import javax.inject.Inject
 
 @HiltViewModel
@@ -28,6 +30,10 @@ class SettingsViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
     val themeMode = prefs.observeThemeMode()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThemeMode.SYSTEM)
+    val screenProtection = prefs.observeScreenProtection().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val appLock = prefs.observeAppLock().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val lastBackup = prefs.observeLastBackup().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val processed = pendingRepository.observeProcessed().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val pending = pendingRepository.observePending()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val accounts = accountRepository.observeAll()
@@ -46,34 +52,54 @@ class SettingsViewModel @Inject constructor(
 
     fun setThemeMode(mode: ThemeMode) = viewModelScope.launch { prefs.setThemeMode(mode) }
 
-    fun loadNearby(id: Long) = viewModelScope.launch { _nearby.value = pendingRepository.nearby(id) }
-    fun clearNearby() { _nearby.value = emptyList() }
-
-    fun confirm(id: Long, cents: Long, type: String, category: String,
-                merchant: String, accountId: Long?) = viewModelScope.launch {
-        runCatching { pendingRepository.confirm(id, cents, type, category, merchant, accountId) }
-            .onSuccess { _message.value = if (it) "已确认入账" else "确认失败，请重新检查金额" }
-            .onFailure { _message.value = "确认失败：${it.message ?: "未知错误"}" }
-    }
-
-    fun dismiss(id: Long, duplicate: Boolean) = viewModelScope.launch {
-        pendingRepository.dismiss(id, duplicate)
-        _message.value = if (duplicate) "已标记为重复" else "已忽略这条通知"
-    }
-
-    fun export(uri: Uri, password: String) = runBackup("备份") { backup.export(uri, password) }
-    fun restore(uri: Uri, password: String) = runBackup("恢复") { backup.restore(uri, password) }
-
-    private fun runBackup(label: String, action: suspend () -> LedgerBackup.Result) {
-        if (_busy.value) return
-        viewModelScope.launch {
-            _busy.value = true
+    val nearbyKey = MutableStateFlow<String?>(null)
+    private var nearbyJob: Job? = null
+    fun loadNearby(id: Long, cents: Long?, type: String) {
+        nearbyJob?.cancel(); nearbyKey.value = null; _nearby.value = emptyList()
+        if (cents == null) return
+        nearbyJob = viewModelScope.launch {
             try {
-                val result = action()
-                _message.value = "$label 完成：${result.accounts} 个账户、${result.transactions} 笔流水。"
-            } catch (error: Exception) {
-                _message.value = "$label 失败：${error.message ?: "文件不可用"}"
-            } finally { _busy.value = false }
+                _nearby.value = pendingRepository.nearby(id, cents, type)
+                nearbyKey.value = "$id|$cents|$type"
+            } catch (cancel: CancellationException) { throw cancel }
+            catch (_: Exception) { _message.value = "候选读取失败，请重新打开核对" }
         }
+    }
+    fun clearNearby() { nearbyJob?.cancel(); nearbyKey.value = null; _nearby.value = emptyList() }
+    private fun action(onResult: (Boolean) -> Unit = {}, block: suspend () -> Boolean) {
+        if (_busy.value) { onResult(false); return }
+        _busy.value = true
+        viewModelScope.launch {
+            try { onResult(block()) }
+            catch (cancel: CancellationException) { throw cancel }
+            catch (e: Exception) { _message.value = "操作失败：${e.message ?: "请重试"}"; onResult(false) }
+            finally { _busy.value = false }
+        }
+    }
+    fun confirm(id: Long, cents: Long, type: String, category: String,
+        merchant: String, accountId: Long?, acknowledged: Set<Long>, onResult: (Boolean) -> Unit) = action(onResult) {
+        pendingRepository.confirm(id, cents, type, category, merchant, accountId, acknowledged).also {
+            _message.value = if (it) "已确认入账" else "确认失败，请重新核对"
+        }
+    }
+    fun dismiss(id: Long, duplicate: Boolean, onResult: (Boolean) -> Unit = {}) = action(onResult) {
+        (pendingRepository.dismiss(id, duplicate) > 0).also { _message.value = if (it) "通知已处理，可在历史记录中恢复" else "处理失败" }
+    }
+    fun reopen(id: Long) = action { (pendingRepository.reopen(id) > 0).also { _message.value = if (it) "已重新加入待确认" else "恢复失败" } }
+    fun setScreenProtection(value: Boolean) = action { prefs.setScreenProtection(value); true }
+    fun setAppLock(value: Boolean) = action { prefs.setAppLock(value); true }
+    fun recoveryFiles() = backup.recoveryFiles()
+    val validation = MutableStateFlow<LedgerBackup.Result?>(null)
+    fun clearValidation() { validation.value = null }
+    fun validate(uri: Uri, password: String) = action {
+        validation.value = backup.validate(uri, password); _message.value = "备份校验通过，尚未替换账本"; true
+    }
+    fun export(uri: Uri, password: String) = action {
+        val result = backup.export(uri, password); prefs.recordBackup()
+        _message.value = "备份已写入并回读校验：${result.accounts} 个账户、${result.transactions} 笔流水"; true
+    }
+    fun restore(uri: Uri, password: String, onResult: (Boolean) -> Unit = {}) = action(onResult) {
+        val result = backup.restore(uri, password)
+        _message.value = "恢复完成：${result.accounts} 个账户、${result.transactions} 笔流水"; true
     }
 }

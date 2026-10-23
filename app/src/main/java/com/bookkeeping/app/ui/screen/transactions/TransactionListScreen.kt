@@ -23,6 +23,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Card
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.LinearProgressIndicator
+import com.bookkeeping.app.ui.components.*
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -63,6 +66,7 @@ import com.bookkeeping.app.data.repository.balanceDeltaCents
 import com.bookkeeping.app.data.repository.canLinkBalance
 import com.bookkeeping.app.data.repository.eligibleBalanceAccount
 import com.bookkeeping.app.ui.theme.LocalFinancePalette
+import com.bookkeeping.app.ui.theme.sourceLabel
 import com.bookkeeping.app.ui.theme.formatYuan
 import java.text.SimpleDateFormat
 import java.math.BigDecimal
@@ -79,6 +83,18 @@ fun TransactionListScreen(
     onAddOpened: () -> Unit = {},
 ) {
     val transactions by viewModel.displayedTransactions.collectAsState()
+    val allTransactions by viewModel.allTransactions.collectAsState()
+    val deleted by viewModel.deletedTransactions.collectAsState()
+    val query by viewModel.query.collectAsState()
+    val filters by viewModel.filters.collectAsState()
+    val showAll by viewModel.showAll.collectAsState()
+    val busy by viewModel.busy.collectAsState()
+    val suggestionsLoading by viewModel.suggestionsLoading.collectAsState()
+    var showFilters by rememberSaveable { mutableStateOf(false) }
+    var showTrash by rememberSaveable { mutableStateOf(false) }
+    var formError by remember { mutableStateOf<String?>(null) }
+    val recentCategory by viewModel.recentCategory.collectAsState()
+    val defaultAccountId by viewModel.defaultAccountId.collectAsState()
     val accounts by viewModel.accountList.collectAsState()
     val monthlyExpense by viewModel.monthlyExpenseCents.collectAsState()
     val monthlyIncome by viewModel.monthlyIncomeCents.collectAsState()
@@ -87,13 +103,17 @@ fun TransactionListScreen(
     val message by viewModel.message.collectAsState()
     val snackbarHost = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    var showAddDialog by remember { mutableStateOf(false) }
-    var showTransferDialog by remember { mutableStateOf(false) }
-    var reviewing by remember { mutableStateOf<TransactionEntity?>(null) }
-    var editing by remember { mutableStateOf<TransactionEntity?>(null) }
+    var showAddDialog by rememberSaveable { mutableStateOf(false) }
+    var showTransferDialog by rememberSaveable { mutableStateOf(false) }
+    var reviewingId by rememberSaveable { mutableStateOf<Long?>(null) }
+    val reviewing = allTransactions.firstOrNull { it.id == reviewingId }
+    var editingId by rememberSaveable { mutableStateOf<Long?>(null) }
+    val editing = allTransactions.firstOrNull { it.id == editingId }
     var editError by remember { mutableStateOf<String?>(null) }
-    var duplicateReview by remember { mutableStateOf<TransactionEntity?>(null) }
-    var returnReview by remember { mutableStateOf<TransactionEntity?>(null) }
+    var duplicateReviewId by rememberSaveable { mutableStateOf<Long?>(null) }
+    val duplicateReview = allTransactions.firstOrNull { it.id == duplicateReviewId }
+    var returnReviewId by rememberSaveable { mutableStateOf<Long?>(null) }
+    val returnReview = allTransactions.firstOrNull { it.id == returnReviewId }
     LaunchedEffect(openAddRequest) {
         if (openAddRequest) {
             showAddDialog = true
@@ -108,7 +128,7 @@ fun TransactionListScreen(
             colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
         ) },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showAddDialog = true },
+            FloatingActionButton(onClick = { formError = null; showAddDialog = true },
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary) {
                 Icon(Icons.Default.Add, contentDescription = "新建账单")
@@ -122,27 +142,37 @@ fun TransactionListScreen(
         ) {
             if (message.isNotBlank()) Text(message, modifier = Modifier.padding(horizontal = 16.dp),
                 color = MaterialTheme.colorScheme.primary)
+            MonthSelector(viewModel.period)
             // 顶部统计卡片（基于全月数据，不受 filter 影响）
             MonthlySummaryCard(
                 monthlyExpenseCents = monthlyExpense,
                 monthlyIncomeCents = monthlyIncome,
             )
 
+            OutlinedTextField(query, viewModel::setQuery, label = { Text("搜索商户、备注或订单号") },
+                singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+            Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+                FilterChip(showAll, onClick = { viewModel.setShowAll(!showAll) }, label = { Text("跨月搜索") })
+                TextButton(onClick = { showFilters = true }) { Text("筛选") }
+                TextButton(onClick = viewModel::clearFilters) { Text("清除筛选") }
+                TextButton(onClick = { showTrash = true }) { Text("回收站") }
+            }
             // 分类筛选 chip 行
             CategoryFilterRow(
                 selected = selectedCategory,
                 onSelect = viewModel::setCategoryFilter,
             )
-            TextButton(onClick = { showTransferDialog = true }, modifier = Modifier.padding(horizontal = 16.dp)) {
+            TextButton(onClick = { formError = null; showTransferDialog = true }, modifier = Modifier.padding(horizontal = 16.dp)) {
                 Text("账户转账")
             }
 
             if (transactions.isEmpty()) {
-                EmptyState(filterActive = selectedCategory != null)
+                EmptyState(filterActive = true)
             } else {
                 // 按日期分组渲染
                 GroupedTransactionList(
                     transactions = transactions,
+                    allTransactions = allTransactions,
                     onDelete = { tx -> viewModel.delete(tx) {
                         scope.launch {
                             if (snackbarHost.showSnackbar("已删除流水", "撤销") == SnackbarResult.ActionPerformed)
@@ -150,11 +180,11 @@ fun TransactionListScreen(
                         }
                     } },
                     accounts = accounts,
-                    onReview = { reviewing = it },
-                    onEdit = { editing = it; editError = null },
-                    onDuplicateReview = { duplicateReview = it; viewModel.findDuplicates(it.id) },
+                    onReview = { reviewingId = it.id },
+                    onEdit = { editingId = it.id; editError = null },
+                    onDuplicateReview = { duplicateReviewId = it.id; viewModel.findDuplicates(it.id) },
                     onUnlinkDuplicate = { viewModel.unlinkDuplicate(it.id) },
-                    onReturnReview = { returnReview = it },
+                    onReturnReview = { returnReviewId = it.id },
                     onUnlinkReturn = { viewModel.unlinkReturn(it.id) },
                     onMarkOrdinaryIncome = { viewModel.markOrdinaryIncome(it.id) },
                 )
@@ -162,71 +192,97 @@ fun TransactionListScreen(
         }
     }
     duplicateReview?.let { tx -> AlertDialog(
-        onDismissRequest = { duplicateReview = null; viewModel.clearSuggestions() },
-        title = { Text("核对是否同一消费") },
+        onDismissRequest = { duplicateReviewId = null; viewModel.clearSuggestions() },
+        title = { Text("核对是否同一笔流水") },
         text = { Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("当前：${tx.merchant} · ¥${BigDecimal.valueOf(tx.amountCents, 2).toPlainString()} · ${tx.source}")
+            Text("当前：${tx.merchant} · ¥${BigDecimal.valueOf(tx.amountCents, 2).toPlainString()} · ${sourceLabel(tx.source)}")
             Text("以下只是相似流水，必须对照原账单、商户和付款方式。")
-            if (suggestions.isEmpty()) Text("没有找到相近的其他来源流水。")
+            if (suggestionsLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (!suggestionsLoading && suggestions.isEmpty()) Text("没有找到相近的其他来源流水。")
             suggestions.forEach { suggestion ->
                 val other = suggestion.other
-                Text("相似度 ${suggestion.score}% · ${other.merchant} · ${other.source}")
+                Text("${ledgerDate(other.timestamp)} · ${other.merchant} · ${sourceLabel(other.source)} · ${other.account.orEmpty()} · ${other.bankFlow.orEmpty()}")
                 TextButton(onClick = {
-                    viewModel.linkDuplicate(tx.id, other.id)
-                    duplicateReview = null; viewModel.clearSuggestions()
+                    viewModel.linkDuplicate(tx.id, other.id) { saved ->
+                        if (saved) { duplicateReviewId = null; viewModel.clearSuggestions() }
+                    }
                 }) { Text("确认是同一笔") }
             }
         } },
-        confirmButton = { TextButton(onClick = { duplicateReview = null; viewModel.clearSuggestions() }) { Text("关闭") } },
+        dismissButton = { if (tx.reviewReason != null) TextButton(enabled = !busy && !suggestionsLoading, onClick = {
+            viewModel.confirmIndependent(tx.id) { saved -> if (saved) { duplicateReviewId = null; viewModel.clearSuggestions() } }
+        }) { Text("确认是独立流水") } },
+        confirmButton = { TextButton(onClick = { duplicateReviewId = null; viewModel.clearSuggestions() }) { Text("关闭") } },
     ) }
 
     if (showAddDialog) {
         AddTransactionDialog(
             accounts = accounts,
-            onDismiss = { showAddDialog = false },
-            onConfirm = { amount, type, category, merchant, note, accountId ->
-                viewModel.addTransaction(amount, type, category, merchant, note, accountId)
-                showAddDialog = false
+            errorMessage = formError,
+            defaultCategory = recentCategory, defaultAccountId = defaultAccountId, onDefaultAccount = viewModel::setDefaultAccount,
+            onDismiss = { showAddDialog = false; formError = null },
+            onConfirm = { amount, type, category, merchant, note, accountId, at, requestId ->
+                formError = null
+                viewModel.addTransaction(amount, type, category, merchant, note, accountId, at, requestId) { saved ->
+                    if (saved) showAddDialog = false else formError = "保存失败，请核对账户和金额后重试。"
+                }
             }
         )
     }
-    if (showTransferDialog) TransferDialog(accounts, onDismiss = { showTransferDialog = false }) {
-        fromId, toId, amount, fee, note ->
-        viewModel.createTransfer(fromId, toId, amount, fee, note)
-        showTransferDialog = false
+    if (showTransferDialog) TransferDialog(accounts, onDismiss = { showTransferDialog = false }, busy = busy, error = formError) {
+        fromId, toId, amount, fee, note, at, requestId ->
+        formError = null
+        viewModel.createTransfer(fromId, toId, amount, fee, note, at, requestId) { saved ->
+            if (saved) showTransferDialog = false else formError = "保存失败，请检查账户和金额。"
+        }
     }
     returnReview?.let { original -> ReturnDialog(original,
-        remainingCents = viewModel.remainingReturn(original),
+        remainingCents = viewModel.remainingReturn(original), busy = busy, error = formError,
         candidates = viewModel.returnCandidates(original), accounts = accounts,
-        onDismiss = { returnReview = null },
-        onRecord = { kind, cents, accountId, note ->
-            viewModel.recordReturn(original.id, kind, cents, accountId, note)
-            returnReview = null
+        onDismiss = { returnReviewId = null },
+        onRecord = { kind, cents, accountId, note, at, requestId ->
+            formError = null
+            viewModel.recordReturn(original.id, kind, cents, accountId, note, at, requestId) { saved ->
+                if (saved) returnReviewId = null else formError = "保存失败，请检查原支出与已退金额。"
+            }
         },
         onLink = { returnId, kind ->
-            viewModel.linkExistingReturn(original.id, returnId, kind)
-            returnReview = null
+            viewModel.linkExistingReturn(original.id, returnId, kind) { saved ->
+                if (saved) returnReviewId = null else formError = "关联失败，请重新核对。"
+            }
         }) }
     editing?.let { transaction ->
         AddTransactionDialog(
             accounts = accounts,
             transaction = transaction,
             errorMessage = editError,
-            onDismiss = { editing = null; editError = null },
-            onConfirm = { amount, type, category, merchant, note, accountId ->
-                viewModel.editTransaction(transaction.id, amount, type, category, merchant, note, accountId) { saved ->
-                    if (saved) { editing = null; editError = null }
+            onDismiss = { editingId = null; editError = null },
+            onConfirm = { amount, type, category, merchant, note, accountId, at, _ ->
+                editError = null
+                viewModel.editTransaction(transaction.id, amount, type, category, merchant, note, accountId, at) { saved ->
+                    if (saved) { editingId = null; editError = null }
                     else editError = "保存失败，请核对账户与账单方向。"
                 }
             },
         )
     }
+    if (showFilters) TransactionFilterDialog(filters, accounts, onDismiss = { showFilters = false }) {
+        viewModel.setFilters(it); showFilters = false
+    }
+    if (showTrash) AlertDialog(onDismissRequest = { showTrash = false }, title = { Text("已删除流水") },
+        text = { LazyColumn(Modifier.heightIn(max = 440.dp)) {
+            if (deleted.isEmpty()) item { Text("回收站为空") }
+            items(deleted, key = { it.id }) { tx -> Column {
+                Text("${ledgerDate(tx.timestamp)} · ${tx.merchant} · ¥${formatYuan(tx.amountCents)}")
+                TextButton(onClick = { viewModel.restore(tx.id) }, enabled = !busy) { Text("恢复") }
+            } }
+        } }, confirmButton = { TextButton(onClick = { showTrash = false }) { Text("关闭") } })
     reviewing?.let { transaction ->
         val available = accounts.filter { eligibleBalanceAccount(it, transaction) }
         val delta = balanceDeltaCents(transaction) ?: 0L
         AlertDialog(
-            onDismissRequest = { reviewing = null },
+            onDismissRequest = { reviewingId = null },
             title = { Text("核对余额账户") },
             text = {
                 Column(modifier = Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()),
@@ -239,23 +295,20 @@ fun TransactionListScreen(
                     if (available.isEmpty()) Text("没有可用于这笔交易的账户。请先在资产页填写当前余额。")
                     available.forEach { account ->
                         TextButton(onClick = {
-                            viewModel.setBalanceAccount(transaction, account.id)
-                            reviewing = null
+                            viewModel.setBalanceAccount(transaction, account.id) { if (it) reviewingId = null }
                         }) { Text(account.name) }
                     }
                     TextButton(onClick = {
-                        viewModel.setBalanceAccount(transaction, null)
-                        reviewing = null
+                        viewModel.setBalanceAccount(transaction, null) { if (it) reviewingId = null }
                     }) { Text("稍后核对") }
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    viewModel.setBalanceAccount(transaction, null, ignore = true)
-                    reviewing = null
+                    viewModel.setBalanceAccount(transaction, null, ignore = true) { if (it) reviewingId = null }
                 }) { Text("暂不计入") }
             },
-            dismissButton = { TextButton(onClick = { reviewing = null }) { Text("取消") } },
+            dismissButton = { TextButton(onClick = { reviewingId = null }) { Text("取消") } },
         )
     }
 }
@@ -276,7 +329,7 @@ private fun MonthlySummaryCard(
     ) {
         Column(modifier = Modifier.padding(20.dp)) {
             Text(
-                text = "本月结余",
+                text = "所选月份 · 净结余",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onPrimaryContainer
             )
@@ -361,6 +414,7 @@ private fun CategoryFilterRow(
 @Composable
 private fun GroupedTransactionList(
     transactions: List<TransactionEntity>,
+    allTransactions: List<TransactionEntity>,
     onDelete: (TransactionEntity) -> Unit,
     accounts: List<AccountEntity>,
     onReview: (TransactionEntity) -> Unit,
@@ -375,8 +429,8 @@ private fun GroupedTransactionList(
     val groups = remember(transactions) {
         transactions.groupBy { dayKey(it.timestamp) }
     }
-    val refunds = remember(transactions) {
-        transactions.asSequence().filter { it.deletedAt == null && it.duplicateOfId == null &&
+    val refunds = remember(allTransactions) {
+        allTransactions.asSequence().filter { it.deletedAt == null && it.duplicateOfId == null && it.reviewReason == null &&
             it.relationKind in setOf("REFUND", "REIMBURSEMENT") && it.type == TransactionType.INCOME.name }
             .groupBy { it.relatedTransactionId }.mapValues { (_, rows) -> rows.sumOf { it.amountCents } }
     }
@@ -408,7 +462,7 @@ private fun GroupedTransactionList(
 @Composable
 private fun DayHeader(dayKey: String, items: List<TransactionEntity>, refunds: Map<Long?, Long>) {
     val expense = dailyExpenseCents(items, refunds)
-    val income = items.filter { it.duplicateOfId == null && it.relationKind !in
+    val income = items.filter { it.duplicateOfId == null && it.reviewReason == null && it.relationKind !in
         setOf("REFUND", "REIMBURSEMENT", "REFUND_PENDING", "REIMBURSEMENT_PENDING") &&
         it.type == TransactionType.INCOME.name }.sumOf { it.amountCents }
 
@@ -444,7 +498,7 @@ private fun DayHeader(dayKey: String, items: List<TransactionEntity>, refunds: M
 }
 
 internal fun dailyExpenseCents(items: List<TransactionEntity>, refunds: Map<Long?, Long>): Long =
-    items.filter { it.deletedAt == null && it.duplicateOfId == null &&
+    items.filter { it.deletedAt == null && it.duplicateOfId == null && it.reviewReason == null &&
         it.type == TransactionType.EXPENSE.name }
         .sumOf { (it.amountCents - (refunds[it.id] ?: 0L)).coerceAtLeast(0L) }
 
@@ -487,6 +541,7 @@ private fun TransactionItem(
     }
     val linked = accounts.firstOrNull { it.id == transaction.balanceAccountId }
     val status = when {
+        transaction.reviewReason != null -> "流水待核对 · 暂不统计"
         transaction.duplicateOfId != null -> "辅助流水 · 不重复统计"
         transaction.relationKind in setOf("REFUND_PENDING", "REIMBURSEMENT_PENDING") -> "退款/报销待核对"
         transaction.relationKind in setOf("REFUND", "REIMBURSEMENT") -> "已关联原支出"
@@ -510,7 +565,7 @@ private fun TransactionItem(
                         style = MaterialTheme.typography.titleMedium, maxLines = 2,
                         overflow = TextOverflow.Ellipsis)
                     Text(listOfNotNull(category.displayName.takeIf { route == null && transaction.merchant.isNotBlank() },
-                        linked?.name ?: transaction.account, timeOnlyFormat.format(Date(transaction.timestamp)))
+                        linked?.name ?: transaction.account, ledgerDate(transaction.timestamp, "HH:mm"))
                         .joinToString(" · "), style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
                         overflow = TextOverflow.Ellipsis)
@@ -524,13 +579,14 @@ private fun TransactionItem(
             if (expanded) {
                 if (route != null) Text(route, style = MaterialTheme.typography.bodySmall,
                     color = finance.transfer)
+                transaction.reviewReason?.let { Text(it, color = finance.warning) }
                 if (transaction.note.isNotBlank()) Text(transaction.note,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (transaction.duplicateOfId != null) {
                     TextButton(onClick = onUnlinkDuplicate) { Text("取消重复关联") }
-                } else if (transaction.importKey != null && type != TransactionType.TRANSFER) {
-                    TextButton(onClick = onDuplicateReview) { Text("核对其他账单是否重复") }
+                } else {
+                    TextButton(onClick = onDuplicateReview) { Text(if (transaction.reviewReason != null) "核对这笔流水" else "核对其他账单是否重复") }
                 }
                 if (transaction.relationKind in setOf("REFUND", "REIMBURSEMENT")) {
                     TextButton(onClick = onUnlinkReturn) { Text("取消退款/报销关联") }
@@ -553,7 +609,7 @@ private fun TransactionItem(
                     }
                 }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(transaction.source, style = MaterialTheme.typography.labelSmall,
+                    Text(sourceLabel(transaction.source), style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f))
                     IconButton(onClick = onEdit) {
@@ -590,26 +646,9 @@ private fun EmptyState(filterActive: Boolean) {
 
 // === 时间分组辅助 ===
 
-private val dayKeyFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-private val timeOnlyFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-private val monthDayFormat = SimpleDateFormat("MM月dd日", Locale.getDefault())
-
-// 把毫秒时间戳转成 "yyyy-MM-dd" 字符串作为分组 key
-private fun dayKey(timestampMs: Long): String = dayKeyFormat.format(Date(timestampMs))
-
-// 把 dayKey 转成展示用的标签："今天" / "昨天" / "MM月dd日"
-private fun dayLabel(dayKey: String): String {
-    val today = Calendar.getInstance().apply {
-        set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-    }
-    val todayKey = dayKeyFormat.format(today.time)
-    val yesterdayKey = dayKeyFormat.format(Date(today.timeInMillis - 86_400_000L))
-    return when (dayKey) {
-        todayKey -> "今天"
-        yesterdayKey -> "昨天"
-        else -> {
-            // 解析回 Date，然后格式化为 MM月dd日
-            runCatching { monthDayFormat.format(dayKeyFormat.parse(dayKey)!!) }.getOrDefault(dayKey)
-        }
-    }
+private fun dayKey(timestampMs: Long): String = ledgerDate(timestampMs, "yyyy-MM-dd")
+private fun dayLabel(dayKey: String): String = when (dayKey) {
+    ledgerToday().toString() -> "今天"
+    ledgerToday().minusDays(1).toString() -> "昨天"
+    else -> dayKey
 }

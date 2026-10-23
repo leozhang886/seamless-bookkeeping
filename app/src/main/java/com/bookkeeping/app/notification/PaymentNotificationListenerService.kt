@@ -34,7 +34,11 @@ class PaymentNotificationListenerService : NotificationListenerService() {
         settings = entryPoint.settingsPreferences()
     }
 
+    override fun onListenerConnected() { super.onListenerConnected(); CaptureDiagnostics.connection(true) }
+    override fun onListenerDisconnected() { CaptureDiagnostics.connection(false); super.onListenerDisconnected() }
+
     override fun onDestroy() {
+        CaptureDiagnostics.connection(false)
         scope.cancel()
         super.onDestroy()
     }
@@ -42,23 +46,28 @@ class PaymentNotificationListenerService : NotificationListenerService() {
     // 通知到达时回调（关键入口）
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         scope.launch {
+            try {
             // The app switch is checked before reading notification text.
             if (!settings.observeAutoCaptureEnabled().first()) return@launch
             val packageName = sbn.packageName ?: return@launch
             if (packageName !in setOf("com.eg.android.AlipayGphone", "com.tencent.mm",
                     BankAppNotificationParser.CCB_PACKAGE)) return@launch
+            CaptureDiagnostics.received()
+            if (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) return@launch
             val extras = sbn.notification?.extras ?: return@launch
             val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
             val regularText = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
-            val text = if (packageName == BankAppNotificationParser.CCB_PACKAGE) {
+            val text = run {
                 val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
                 val onlyLine = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
                     ?.singleOrNull()?.toString()
                 listOfNotNull(regularText, bigText, onlyLine).maxByOrNull { it.length }
-            } else regularText
+            }
             val parsed = NotificationParser.parse(packageName, title, text, sbn.postTime)
                 ?: return@launch
-            pending.save(packageName, sbn.key, title, text, parsed)
+            if (pending.save(packageName, sbn.key, title, text, parsed, sbn.postTime)) CaptureDiagnostics.saved()
+            } catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+            catch (_: Exception) { CaptureDiagnostics.failed() }
         }
     }
 }

@@ -14,7 +14,7 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface TransactionDao {
 
-    // 插入。如果 id 冲突就替换。返回新插入的 id
+    // 插入发生冲突时中止，不能覆盖已有流水。返回新插入的 id
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(transaction: TransactionEntity): Long
 
@@ -27,17 +27,29 @@ interface TransactionDao {
     @Query("UPDATE transactions SET deletedAt = NULL WHERE id = :id")
     suspend fun restore(id: Long)
 
-    @Query("UPDATE transactions SET deletedAt = :time WHERE id = :anchorId OR relatedTransactionId = :anchorId")
+    @Query("UPDATE transactions SET deletedAt = :time WHERE deletedAt IS NULL AND (id = :anchorId OR (relatedTransactionId = :anchorId AND relationKind IN ('TRANSFER_IN','TRANSFER_FEE')))")
     suspend fun softDeleteTransferGroup(anchorId: Long, time: Long): Int
 
-    @Query("UPDATE transactions SET deletedAt = NULL WHERE id = :anchorId OR relatedTransactionId = :anchorId")
-    suspend fun restoreTransferGroup(anchorId: Long)
+    @Query("UPDATE transactions SET deletedAt = NULL WHERE deletedAt = :deletedAt AND (id = :anchorId OR (relatedTransactionId = :anchorId AND relationKind IN ('TRANSFER_IN','TRANSFER_FEE')))")
+    suspend fun restoreTransferGroup(anchorId: Long, deletedAt: Long)
 
     @Query("UPDATE transactions SET deletedAt = :time WHERE importBatchId = :batchId AND deletedAt IS NULL")
     suspend fun softDeleteBatch(batchId: Long, time: Long): Int
 
+    @Query("SELECT * FROM transactions WHERE id = :anchorId OR (relatedTransactionId = :anchorId AND relationKind IN ('TRANSFER_IN','TRANSFER_FEE'))")
+    suspend fun transferGroup(anchorId: Long): List<TransactionEntity>
+    @Query("SELECT * FROM transactions WHERE deletedAt IS NULL AND duplicateOfId IS NULL AND reviewReason IS NULL AND ((timestamp >= :startMs AND timestamp < :endMs) OR (relationKind IN ('REFUND','REIMBURSEMENT') AND relatedTransactionId IN (SELECT id FROM transactions WHERE timestamp >= :startMs AND timestamp < :endMs)))")
+    fun observeAccountingInputs(startMs: Long, endMs: Long): Flow<List<TransactionEntity>>
+
     @Query("SELECT * FROM transactions WHERE importBatchId = :batchId")
     suspend fun byBatch(batchId: Long): List<TransactionEntity>
+
+    @Query("UPDATE transactions SET deletedAt = NULL WHERE importBatchId = :batchId AND deletedAt = :deletedAt")
+    suspend fun restoreBatchRows(batchId: Long, deletedAt: Long): Int
+    @Query("SELECT * FROM transactions WHERE deletedAt IS NOT NULL ORDER BY deletedAt DESC")
+    fun observeDeleted(): Flow<List<TransactionEntity>>
+    @Query("SELECT * FROM transactions WHERE amountCents = :amountCents AND timestamp BETWEEN :startMs AND :endMs AND deletedAt IS NULL AND duplicateOfId IS NULL")
+    suspend fun findAmountNear(amountCents: Long, startMs: Long, endMs: Long): List<TransactionEntity>
 
     @Query("DELETE FROM transactions")
     suspend fun clearAll()
@@ -57,13 +69,16 @@ interface TransactionDao {
     @Query("SELECT COUNT(*) FROM transactions WHERE duplicateOfId = :primaryId AND deletedAt IS NULL")
     suspend fun activeDuplicateCount(primaryId: Long): Int
 
-    @Query("SELECT * FROM transactions WHERE relatedTransactionId = :originalId AND relationKind IN ('REFUND', 'REIMBURSEMENT') AND deletedAt IS NULL")
+    @Query("SELECT * FROM transactions WHERE relatedTransactionId = :originalId AND relationKind IN ('REFUND', 'REIMBURSEMENT') AND deletedAt IS NULL AND duplicateOfId IS NULL")
     suspend fun returnsFor(originalId: Long): List<TransactionEntity>
+
+    @Query("UPDATE transactions SET category = :category WHERE relatedTransactionId = :originalId AND relationKind IN ('REFUND','REIMBURSEMENT')")
+    suspend fun syncReturnCategory(originalId: Long, category: String)
 
     // 查所有交易，按时间倒序。
     // Flow<List<...>> 表示"响应式":数据库变了，订阅者自动收到新列表。
     // 嵌入式类比：寄存器变化时自动触发中断给上层。
-    @Query("SELECT * FROM transactions WHERE deletedAt IS NULL AND (relationKind IS NULL OR relationKind != 'TRANSFER_IN') ORDER BY timestamp DESC")
+    @Query("SELECT * FROM transactions WHERE deletedAt IS NULL AND (relationKind IS NULL OR relationKind != 'TRANSFER_IN' OR reviewReason IS NOT NULL) ORDER BY timestamp DESC")
     fun observeAll(): Flow<List<TransactionEntity>>
 
     @Query("SELECT * FROM transactions WHERE deletedAt IS NULL ORDER BY timestamp DESC")
@@ -83,6 +98,8 @@ interface TransactionDao {
 
     @Query("SELECT * FROM transactions WHERE id = :id")
     suspend fun getById(id: Long): TransactionEntity?
+    @Query("SELECT * FROM transactions WHERE clientRequestId = :requestId LIMIT 1")
+    suspend fun getByRequestId(requestId: String): TransactionEntity?
 
     @Query("SELECT * FROM transactions WHERE importKey = :key LIMIT 1")
     suspend fun getByImportKey(key: String): TransactionEntity?

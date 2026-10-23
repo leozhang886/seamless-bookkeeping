@@ -10,6 +10,8 @@ import androidx.room.Index
 @Entity(tableName = "transactions", indices = [
     Index("timestamp"), Index("importKey"), Index("balanceAccountId"),
     Index("importBatchId"), Index("duplicateOfId"), Index("relatedTransactionId"),
+    Index("sourceIdentity"), Index(value = ["amountCents", "timestamp"]),
+    Index(value = ["clientRequestId"], unique = true),
 ])
 data class TransactionEntity(
     @PrimaryKey(autoGenerate = true)
@@ -61,6 +63,18 @@ data class TransactionEntity(
     @ColumnInfo(defaultValue = "1") val parserVersion: Int = 1,
     val sourceRow: Int? = null,
     val sourceOrderId: String? = null,
+    val createdAt: Long? = null,
+    val modifiedAt: Long? = null,
+    val sourcePaymentMethod: String? = null,
+    val sourceAccountKind: String? = null,
+    val sourceBalanceCents: Long? = null,
+    val sourceIdentity: String? = null,
+    val rawData: String? = null,
+    // Uncertain evidence is retained, but cannot silently alter totals or balances.
+    val reviewReason: String? = null,
+    @ColumnInfo(defaultValue = "'INSTANT'") val timePrecision: String = "INSTANT",
+    val sourcePage: Int? = null,
+    val clientRequestId: String? = null,
 )
 
 // 收入还是支出

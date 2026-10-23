@@ -42,4 +42,16 @@ class ConstructionBankPdfImporterTest {
         assertNotEquals(first.importKey, changed.importKey)
         assertNotEquals(first.importKey, nextSequence.importKey)
     }
+    @Test fun exportSequenceChangesPreserveSourceEvidenceButNeverMergeDistinctPostedBalances() {
+        val columns = listOf("1", "汇兑", "20261015", "-12.00", "988.00", "手机银行", "某账户")
+        val first = ConstructionBankPdfImporter.parseColumns(columns, "3456")
+        val overlap = ConstructionBankPdfImporter.parseColumns(columns.toMutableList().apply { this[0] = "47" }, "3456")
+        assertEquals(first.sourceIdentity, overlap.sourceIdentity)
+        assertEquals("EXPENSE", first.type)
+        assertTrue(first.reviewReason != null)
+        val next = ConstructionBankPdfImporter.parseColumns(columns.toMutableList().apply { this[4] = "976.00" }, "3456")
+        assertNotEquals(first.sourceIdentity, next.sourceIdentity)
+        assertTrue(ConstructionBankPdfImporter.balancesContinuous(listOf(first, next)))
+        assertFalse(ConstructionBankPdfImporter.balancesContinuous(listOf(first, next.copy(sourceBalanceCents = 97500))))
+    }
 }

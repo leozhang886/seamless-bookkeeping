@@ -31,6 +31,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.bookkeeping.app.ui.components.MonthSelector
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,12 +52,15 @@ fun BudgetScreen(viewModel: BudgetViewModel = hiltViewModel()) {
     val budget by viewModel.budget.collectAsState()
     val expenseByCategory by viewModel.expenseByCategory.collectAsState()
     val totalExpense by viewModel.totalExpenseCents.collectAsState()
-    val daysRemaining = remember { viewModel.daysRemaining() }
+    val daysRemaining by viewModel.period.daysRemaining.collectAsState()
+    val message by viewModel.message.collectAsState()
+    val busy by viewModel.busy.collectAsState()
+    var formError by rememberSaveable { mutableStateOf<String?>(null) }
 
     // 对话框状态
-    var showEditTotal by remember { mutableStateOf(false) }
-    var showAddCategory by remember { mutableStateOf(false) }
-    var editingCategory by remember { mutableStateOf<TransactionCategory?>(null) }
+    var showEditTotal by rememberSaveable { mutableStateOf(false) }
+    var showAddCategory by rememberSaveable { mutableStateOf(false) }
+    var editingCategory by rememberSaveable { mutableStateOf<TransactionCategory?>(null) }
 
     Scaffold(topBar = { TopAppBar(
         title = { Text("预算", style = MaterialTheme.typography.headlineSmall) },
@@ -67,6 +73,12 @@ fun BudgetScreen(viewModel: BudgetViewModel = hiltViewModel()) {
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            item { MonthSelector(viewModel.period) }
+            item { Text("按当前月预算模板对照所选月份；退款和报销抵减原支出，转账不占预算。", style = MaterialTheme.typography.bodySmall) }
+            if (message.isNotBlank()) item { Row {
+                Text(message, Modifier.weight(1f))
+                if (message.contains("可撤销")) TextButton(onClick = viewModel::undoRemove, enabled = !busy) { Text("撤销") }
+            } }
             // 总预算卡片
             item(key = "total_budget") {
                 TotalBudgetCard(
@@ -124,13 +136,14 @@ fun BudgetScreen(viewModel: BudgetViewModel = hiltViewModel()) {
     // 总预算对话框
     if (showEditTotal) {
         EditBudgetDialog(
+            busy = busy, error = formError,
             title = "设置月预算",
             initialCents = budget.monthlyTotalCents,
             pickCategory = false,
             onDismiss = { showEditTotal = false },
             onConfirm = { _, cents ->
-                viewModel.setMonthlyTotal(cents)
-                showEditTotal = false
+                formError = null
+                viewModel.setMonthlyTotal(cents) { if (it) showEditTotal = false else formError = "保存失败，请重试" }
             },
         )
     }
@@ -138,13 +151,14 @@ fun BudgetScreen(viewModel: BudgetViewModel = hiltViewModel()) {
     // 添加分类预算对话框
     if (showAddCategory) {
         EditBudgetDialog(
+            busy = busy, error = formError,
             title = "添加分类预算",
             pickCategory = true,
             excludeCategories = budget.perCategory.keys,
             onDismiss = { showAddCategory = false },
             onConfirm = { cat, cents ->
-                if (cat != null) viewModel.setCategoryBudget(cat, cents)
-                showAddCategory = false
+                formError = null
+                if (cat != null) viewModel.setCategoryBudget(cat, cents) { if (it) showAddCategory = false else formError = "保存失败，请重试" }
             },
         )
     }
@@ -152,14 +166,15 @@ fun BudgetScreen(viewModel: BudgetViewModel = hiltViewModel()) {
     // 编辑某分类预算对话框
     editingCategory?.let { cat ->
         EditBudgetDialog(
+            busy = busy, error = formError,
             title = "${cat.displayName} 预算",
             initialCents = budget.perCategory[cat] ?: 0L,
             pickCategory = false,
             initialCategory = cat,
             onDismiss = { editingCategory = null },
             onConfirm = { _, cents ->
-                viewModel.setCategoryBudget(cat, cents)
-                editingCategory = null
+                formError = null
+                viewModel.setCategoryBudget(cat, cents) { if (it) editingCategory = null else formError = "保存失败，请重试" }
             },
         )
     }
@@ -187,7 +202,7 @@ private fun TotalBudgetCard(
         Column(modifier = Modifier.padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "本月总预算",
+                    text = "月预算模板",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                     modifier = Modifier.weight(1f),
@@ -233,7 +248,7 @@ private fun TotalBudgetCard(
                         modifier = Modifier.weight(1f),
                     )
                     Text(
-                        text = "剩 $daysRemaining 天",
+                        text = if (daysRemaining > 0) "剩 $daysRemaining 天" else "历史月份",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
                     )
@@ -282,8 +297,8 @@ private fun CategoryBudgetCard(
                 progress = { ratio.coerceIn(0f, 1f) },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(6.dp)
-                    .padding(top = 4.dp),
+                    .padding(top = 4.dp)
+                    .height(6.dp),
                 color = progressColor(ratio),
                 trackColor = MaterialTheme.colorScheme.surfaceVariant,
                 drawStopIndicator = {},

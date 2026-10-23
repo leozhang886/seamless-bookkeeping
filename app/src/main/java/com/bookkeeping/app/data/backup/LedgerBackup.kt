@@ -59,39 +59,39 @@ class LedgerBackup @Inject constructor(
 
     suspend fun export(uri: Uri, password: String): Result = withContext(Dispatchers.IO) {
         require(password.length >= 12) { "备份口令至少 12 个字符" }
+        budgets.ensureMigrated()
         val snapshot = database.withTransaction {
             Snapshot(accounts.getAllRaw(), transactions.getAllRaw(), meta.allBatches(),
-                meta.allIdentities(), meta.allCheckpoints(), meta.allPending(), budgets.observe().first())
+                meta.allIdentities(), meta.allCheckpoints(), meta.allPending(), budgets.snapshotInTransaction())
         }
-        val plain = encode(snapshot)
-        require(plain.size <= MAX_PLAIN_BYTES) { "账本过大，暂无法生成备份" }
+        val compressed = encode(snapshot)
         val salt = ByteArray(16).also(SecureRandom()::nextBytes)
         val iv = ByteArray(12).also(SecureRandom()::nextBytes)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
             init(Cipher.ENCRYPT_MODE, key(password, salt), GCMParameterSpec(128, iv))
         }
-        val compressed = ByteArrayOutputStream().also { out ->
-            GZIPOutputStream(out).use { it.write(plain) }
-        }.toByteArray()
         val encrypted = cipher.doFinal(compressed)
-        context.contentResolver.openOutputStream(uri, "wt")?.use { out ->
-            out.write(MAGIC)
-            out.write(salt)
-            out.write(iv)
-            out.write(encrypted)
-            out.flush()
-        } ?: error("无法写入备份文件")
-        // Read the provider's saved bytes back; a successful write alone is not a verified backup.
-        val checked = read(uri, password)
-        check(checked.accounts.size == snapshot.accounts.size &&
-            checked.transactions.size == snapshot.transactions.size) { "备份校验失败，请重新导出" }
+        val temporary = java.io.File.createTempFile("ledger-export-", ".sbk", context.cacheDir)
+        try {
+            temporary.outputStream().use { out -> out.write(MAGIC); out.write(salt); out.write(iv); out.write(encrypted) }
+            check(read(Uri.fromFile(temporary), password) == snapshot) { "备份校验失败" }
+            context.contentResolver.openOutputStream(uri, "wt")?.use { out ->
+                temporary.inputStream().use { it.copyTo(out) }; out.flush()
+            } ?: error("无法写入备份文件")
+            check(read(uri, password) == snapshot) { "备份回读校验失败，请重新导出" }
+        } finally { temporary.delete() }
         Result(snapshot.accounts.size, snapshot.transactions.size)
     }
 
     suspend fun restore(uri: Uri, password: String): Result = withContext(Dispatchers.IO) {
         val snapshot = read(uri, password) // Authentication and validation finish before any write.
-        val oldBudget = budgets.observe().first()
-        try { database.withTransaction {
+        budgets.ensureMigrated()
+        database.access.replace {
+            // Keep an authenticated recovery copy before replacing any rows.
+            val recovery = java.io.File(context.filesDir, "recovery").apply { mkdirs() }
+            val file = java.io.File(recovery, "before-restore-${System.currentTimeMillis()}.sbk")
+            export(Uri.fromFile(file), password)
+            database.withTransaction {
             meta.clearPending()
             meta.clearIdentities()
             meta.clearBatches()
@@ -104,14 +104,18 @@ class LedgerBackup @Inject constructor(
             snapshot.identities.forEach { meta.restoreIdentity(it) }
             snapshot.checkpoints.forEach { meta.restoreCheckpoint(it) }
             snapshot.pending.forEach { meta.restorePending(it) }
-            // DataStore is separate storage; if its update throws, Room rolls back.
-            budgets.replace(snapshot.budget)
-        } } catch (error: Exception) {
-            runCatching { budgets.replace(oldBudget) }
-            throw error
+            budgets.replaceInTransaction(snapshot.budget)
+            }
         }
         Result(snapshot.accounts.size, snapshot.transactions.size)
     }
+
+    suspend fun validate(uri: Uri, password: String): Result = withContext(Dispatchers.IO) {
+        val snapshot = read(uri, password)
+        Result(snapshot.accounts.size, snapshot.transactions.size)
+    }
+    fun recoveryFiles(): List<java.io.File> = java.io.File(context.filesDir, "recovery")
+        .listFiles()?.filter { it.extension == "sbk" }?.sortedByDescending { it.lastModified() }.orEmpty()
 
     private fun read(uri: Uri, password: String): Snapshot {
         require(password.isNotBlank()) { "请输入备份口令" }
@@ -125,8 +129,7 @@ class LedgerBackup @Inject constructor(
         }
         val compressed = try { cipher.doFinal(bytes, 32, bytes.size - 32) }
             catch (_: Exception) { throw IllegalArgumentException("口令错误或备份文件已损坏") }
-        val plain = GZIPInputStream(ByteArrayInputStream(compressed)).use { limited(it, MAX_PLAIN_BYTES) }
-        return decode(plain)
+        return GZIPInputStream(ByteArrayInputStream(compressed)).use { decode(it) }
     }
 
     private fun key(password: String, salt: ByteArray): SecretKeySpec {
@@ -137,12 +140,30 @@ class LedgerBackup @Inject constructor(
     }
 
     private fun encode(s: Snapshot): ByteArray {
-        val root = JSONObject().put("format", 1).put("databaseVersion", 5)
-        root.put("accounts", JSONArray().also { a -> s.accounts.forEach { x -> a.put(JSONObject()
+        val output = ByteArrayOutputStream()
+        GZIPOutputStream(output).use { gzip ->
+            var written = 0L
+            val bounded = object : java.io.OutputStream() {
+                override fun write(value: Int) { require(++written <= MAX_PLAIN_BYTES) { "账本超过备份大小上限" }; gzip.write(value) }
+                override fun write(bytes: ByteArray, offset: Int, length: Int) {
+                    written += length; require(written <= MAX_PLAIN_BYTES) { "账本超过备份大小上限" }; gzip.write(bytes, offset, length)
+                }
+            }
+            val writer = java.io.OutputStreamWriter(bounded, Charsets.UTF_8)
+            writer.write("{\"format\":2,\"databaseVersion\":6")
+            fun <T> rows(name: String, values: List<T>, encodeRow: (T) -> JSONObject) {
+                writer.write(",\"$name\":[")
+                values.forEachIndexed { index, value ->
+                    if (index > 0) writer.write(",")
+                    writer.write(encodeRow(value).toString())
+                }
+                writer.write("]")
+            }
+            rows("accounts", s.accounts) { x -> JSONObject()
             .put("id", x.id).put("name", x.name).put("kind", x.kind)
             .put("balanceCents", x.balanceCents).put("updatedAt", x.updatedAt)
-            .put("archivedAt", x.archivedAt)) } })
-        root.put("transactions", JSONArray().also { a -> s.transactions.forEach { x -> a.put(JSONObject()
+            .put("archivedAt", x.archivedAt) }
+            rows("transactions", s.transactions) { x -> JSONObject()
             .put("id", x.id).put("amountCents", x.amountCents).put("type", x.type)
             .put("category", x.category).put("merchant", x.merchant).put("note", x.note)
             .put("source", x.source).put("account", x.account).put("timestamp", x.timestamp)
@@ -152,77 +173,148 @@ class LedgerBackup @Inject constructor(
             .put("duplicateOfId", x.duplicateOfId).put("relatedTransactionId", x.relatedTransactionId)
             .put("relationKind", x.relationKind).put("deletedAt", x.deletedAt)
             .put("parserVersion", x.parserVersion).put("sourceRow", x.sourceRow)
-            .put("sourceOrderId", x.sourceOrderId)) } })
-        root.put("batches", JSONArray().also { a -> s.batches.forEach { x -> a.put(JSONObject()
+            .put("sourceOrderId", x.sourceOrderId).put("createdAt", x.createdAt).put("modifiedAt", x.modifiedAt)
+            .put("sourcePaymentMethod", x.sourcePaymentMethod).put("sourceAccountKind", x.sourceAccountKind)
+            .put("sourceBalanceCents", x.sourceBalanceCents).put("sourceIdentity", x.sourceIdentity)
+            .put("rawData", x.rawData).put("reviewReason", x.reviewReason)
+            .put("timePrecision", x.timePrecision).put("sourcePage", x.sourcePage).put("clientRequestId", x.clientRequestId) }
+            rows("batches", s.batches) { x -> JSONObject()
             .put("id", x.id).put("fileName", x.fileName).put("source", x.source)
             .put("importedAt", x.importedAt).put("originalRows", x.originalRows)
             .put("parsedRows", x.parsedRows).put("rejectedRows", x.rejectedRows)
             .put("amountCents", x.amountCents).put("fingerprint", x.fingerprint)
-            .put("undoneAt", x.undoneAt)) } })
-        root.put("identities", JSONArray().also { a -> s.identities.forEach { x -> a.put(JSONObject()
-            .put("importKey", x.importKey).put("transactionId", x.transactionId)) } })
-        root.put("checkpoints", JSONArray().also { a -> s.checkpoints.forEach { x -> a.put(JSONObject()
+            .put("undoneAt", x.undoneAt) }
+            rows("identities", s.identities) { x -> JSONObject()
+            .put("importKey", x.importKey).put("transactionId", x.transactionId) }
+            rows("checkpoints", s.checkpoints) { x -> JSONObject()
             .put("id", x.id).put("accountId", x.accountId).put("balanceCents", x.balanceCents)
-            .put("occurredAt", x.occurredAt).put("reason", x.reason)) } })
-        root.put("pending", JSONArray().also { a -> s.pending.forEach { x -> a.put(JSONObject()
+            .put("occurredAt", x.occurredAt).put("reason", x.reason) }
+            rows("pending", s.pending) { x -> JSONObject()
             .put("id", x.id).put("fingerprint", x.fingerprint).put("sourcePackage", x.sourcePackage)
             .put("rawText", x.rawText).put("rawTimestamp", x.rawTimestamp)
             .put("amountCents", x.amountCents).put("type", x.type).put("category", x.category)
             .put("merchant", x.merchant).put("source", x.source).put("confidence", x.confidence)
-            .put("status", x.status)) } })
-        root.put("budget", JSONObject().put("monthlyTotalCents", s.budget.monthlyTotalCents)
-            .put("categories", JSONObject().also { o -> s.budget.perCategory.forEach { (k, v) -> o.put(k.name, v) } }))
-        return root.toString().toByteArray(Charsets.UTF_8)
+            .put("status", x.status).put("parserVersion", x.parserVersion).put("sourceAccount", x.sourceAccount)
+            .put("sourceAccountKind", x.sourceAccountKind).put("bankFlow", x.bankFlow)
+            .put("relationKind", x.relationKind).put("receivedAt", x.receivedAt).put("eventKey", x.eventKey)
+            .put("transactionId", x.transactionId) }
+            writer.write(",\"budget\":")
+            writer.write(JSONObject().put("monthlyTotalCents", s.budget.monthlyTotalCents)
+                .put("categories", JSONObject().also { o -> s.budget.perCategory.forEach { (k, v) -> o.put(k.name, v) } }).toString())
+            writer.write("}"); writer.flush()
+        }
+        return output.toByteArray()
     }
 
-    private fun decode(bytes: ByteArray): Snapshot {
-        val root = JSONObject(String(bytes, Charsets.UTF_8))
-        require(root.getInt("format") == 1 && root.getInt("databaseVersion") <= 5) { "备份版本不受支持" }
-        fun JSONArray.objects() = (0 until length()).map { getJSONObject(it) }
-        val accountList = root.getJSONArray("accounts").objects().map { x -> AccountEntity(
-            id = x.getLong("id"), name = x.getString("name"), kind = x.getString("kind"),
-            balanceCents = x.getLong("balanceCents"), updatedAt = x.getLong("updatedAt"),
+    private fun decode(input: java.io.InputStream): Snapshot {
+        var readBytes = 0L
+        val bounded = object : java.io.FilterInputStream(input) {
+            override fun read(): Int = super.read().also { if (it >= 0) { readBytes++; checkLimit() } }
+            override fun read(bytes: ByteArray, offset: Int, length: Int): Int = `in`.read(bytes, offset, length).also {
+                if (it > 0) { readBytes += it; checkLimit() }
+            }
+            fun checkLimit() { require(readBytes <= MAX_PLAIN_BYTES) { "备份解压后过大" } }
+        }
+        val reader = android.util.JsonReader(java.io.InputStreamReader(bounded, Charsets.UTF_8))
+        fun objectRow(depth: Int = 0): JSONObject {
+            require(depth <= 3) { "备份结构过深" }
+            val value = JSONObject(); val names = mutableSetOf<String>()
+            reader.beginObject()
+            while (reader.hasNext()) {
+                val name = reader.nextName()
+                require(names.add(name) && names.size <= 64) { "备份字段重复或过多" }
+                val field: Any = when (reader.peek()) {
+                    android.util.JsonToken.BEGIN_OBJECT -> objectRow(depth + 1)
+                    android.util.JsonToken.NULL -> { reader.nextNull(); JSONObject.NULL }
+                    android.util.JsonToken.BOOLEAN -> reader.nextBoolean()
+                    android.util.JsonToken.NUMBER -> reader.nextString().also { require(Regex("-?[0-9]+").matches(it)) { "备份数字格式错误" } }
+                    android.util.JsonToken.STRING -> reader.nextString().also { require(it.length <= 16000) { "备份字段过长" } }
+                    else -> error("备份结构不受支持")
+                }
+                value.put(name, field)
+            }
+            reader.endObject(); return value
+        }
+        fun <T> rows(limit: Int = 500_000, parse: (JSONObject) -> T): List<T> {
+            val list = ArrayList<T>(); reader.beginArray()
+            while (reader.hasNext()) { require(list.size < limit) { "备份记录数超出上限" }; list += parse(objectRow()) }
+            reader.endArray(); return list
+        }
+        var accountList: List<AccountEntity> = emptyList()
+        var transactionList: List<TransactionEntity> = emptyList()
+        var batches: List<ImportBatchEntity> = emptyList()
+        var identities: List<ImportIdentityEntity> = emptyList()
+        var checkpoints: List<BalanceCheckpointEntity> = emptyList()
+        var pending: List<PendingNotificationEntity> = emptyList()
+        var budgetJson = JSONObject()
+        var format = 0; var version = 0
+        val seen = mutableSetOf<String>()
+        reader.beginObject()
+        while (reader.hasNext()) {
+            val name = reader.nextName(); require(seen.add(name)) { "备份分区重复" }
+            when (name) {
+                "format" -> format = reader.nextInt()
+                "databaseVersion" -> version = reader.nextInt()
+                "accounts" -> accountList = rows { x -> AccountEntity(
+            id = x.strictLong("id"), name = x.getString("name"), kind = x.getString("kind"),
+            balanceCents = x.strictLong("balanceCents"), updatedAt = x.strictLong("updatedAt"),
             archivedAt = x.nullLong("archivedAt")) }
-        val transactionList = root.getJSONArray("transactions").objects().map { x -> TransactionEntity(
-            id = x.getLong("id"), amountCents = x.getLong("amountCents"), type = x.getString("type"),
+                "transactions" -> transactionList = rows { x -> TransactionEntity(
+            id = x.strictLong("id"), amountCents = x.strictLong("amountCents"), type = x.getString("type"),
             category = x.getString("category"), merchant = x.getString("merchant"),
             note = x.getString("note"), source = x.getString("source"), account = x.nullString("account"),
-            timestamp = x.getLong("timestamp"), importKey = x.nullString("importKey"),
+            timestamp = x.strictLong("timestamp"), importKey = x.nullString("importKey"),
             bankFlow = x.nullString("bankFlow"), balanceAccountId = x.nullLong("balanceAccountId"),
             balanceTrackingVersion = x.nullInt("balanceTrackingVersion"),
             balanceIgnored = x.getBoolean("balanceIgnored"), importBatchId = x.nullLong("importBatchId"),
             duplicateOfId = x.nullLong("duplicateOfId"), relatedTransactionId = x.nullLong("relatedTransactionId"),
             relationKind = x.nullString("relationKind"), deletedAt = x.nullLong("deletedAt"),
             parserVersion = x.getInt("parserVersion"), sourceRow = x.nullInt("sourceRow"),
-            sourceOrderId = x.nullString("sourceOrderId")) }
-        val batches = root.getJSONArray("batches").objects().map { x -> ImportBatchEntity(
-            id = x.getLong("id"), fileName = x.getString("fileName"), source = x.getString("source"),
-            importedAt = x.getLong("importedAt"), originalRows = x.getInt("originalRows"),
+            sourceOrderId = x.nullString("sourceOrderId"), createdAt = x.nullLong("createdAt"), modifiedAt = x.nullLong("modifiedAt"),
+            sourcePaymentMethod = x.nullString("sourcePaymentMethod"), sourceAccountKind = x.nullString("sourceAccountKind"),
+            sourceBalanceCents = x.nullLong("sourceBalanceCents"), sourceIdentity = x.nullString("sourceIdentity"),
+            rawData = x.nullString("rawData"), reviewReason = x.nullString("reviewReason"),
+            timePrecision = x.optString("timePrecision", if (x.getString("source") == "BANK_PDF") "DAY" else "INSTANT"),
+            sourcePage = x.nullInt("sourcePage"), clientRequestId = x.nullString("clientRequestId")) }
+                "batches" -> batches = rows { x -> ImportBatchEntity(
+            id = x.strictLong("id"), fileName = x.getString("fileName"), source = x.getString("source"),
+            importedAt = x.strictLong("importedAt"), originalRows = x.getInt("originalRows"),
             parsedRows = x.getInt("parsedRows"), rejectedRows = x.getInt("rejectedRows"),
-            amountCents = x.getLong("amountCents"), fingerprint = x.getString("fingerprint"),
+            amountCents = x.strictLong("amountCents"), fingerprint = x.getString("fingerprint"),
             undoneAt = x.nullLong("undoneAt")) }
-        val identities = root.getJSONArray("identities").objects().map { x -> ImportIdentityEntity(
-            importKey = x.getString("importKey"), transactionId = x.getLong("transactionId")) }
-        val checkpoints = root.getJSONArray("checkpoints").objects().map { x -> BalanceCheckpointEntity(
-            id = x.getLong("id"), accountId = x.getLong("accountId"),
-            balanceCents = x.getLong("balanceCents"), occurredAt = x.getLong("occurredAt"),
+                "identities" -> identities = rows { x -> ImportIdentityEntity(
+            importKey = x.getString("importKey"), transactionId = x.strictLong("transactionId")) }
+                "checkpoints" -> checkpoints = rows { x -> BalanceCheckpointEntity(
+            id = x.strictLong("id"), accountId = x.strictLong("accountId"),
+            balanceCents = x.strictLong("balanceCents"), occurredAt = x.strictLong("occurredAt"),
             reason = x.getString("reason")) }
-        val pending = root.getJSONArray("pending").objects().map { x -> PendingNotificationEntity(
-            id = x.getLong("id"), fingerprint = x.getString("fingerprint"),
+                "pending" -> pending = rows { x -> PendingNotificationEntity(
+            id = x.strictLong("id"), fingerprint = x.getString("fingerprint"),
             sourcePackage = x.getString("sourcePackage"), rawText = x.getString("rawText"),
-            rawTimestamp = x.getLong("rawTimestamp"), amountCents = x.getLong("amountCents"),
+            rawTimestamp = x.strictLong("rawTimestamp"), amountCents = x.strictLong("amountCents"),
             type = x.getString("type"), category = x.getString("category"), merchant = x.getString("merchant"),
-            source = x.getString("source"), confidence = x.getInt("confidence"), status = x.getString("status")) }
-        val budgetJson = root.getJSONObject("budget")
+            source = x.getString("source"), confidence = x.getInt("confidence"), status = x.getString("status"),
+            parserVersion = x.optInt("parserVersion", 1), sourceAccount = x.nullString("sourceAccount"),
+            sourceAccountKind = x.nullString("sourceAccountKind"), bankFlow = x.nullString("bankFlow"),
+            relationKind = x.nullString("relationKind"), receivedAt = x.nullLong("receivedAt"),
+            eventKey = x.nullString("eventKey"), transactionId = x.nullLong("transactionId")) }
+                "budget" -> budgetJson = objectRow()
+                else -> error("备份包含未知分区")
+            }
+        }
+        reader.endObject()
+        require(reader.peek() == android.util.JsonToken.END_DOCUMENT) { "备份末尾有多余内容" }
+        require(format in 1..2 && version in 1..6 && seen.containsAll(setOf("accounts", "transactions", "batches", "identities", "checkpoints", "pending", "budget"))) { "备份版本不受支持或分区不完整" }
         val categories = budgetJson.getJSONObject("categories")
-        val budget = BudgetSettings(budgetJson.getLong("monthlyTotalCents"),
+        val budget = BudgetSettings(budgetJson.strictLong("monthlyTotalCents"),
             categories.keys().asSequence().mapNotNull { name ->
-                runCatching { TransactionCategory.valueOf(name) }.getOrNull()?.let { it to categories.getLong(name) }
+                runCatching { TransactionCategory.valueOf(name) }.getOrNull()?.let { it to categories.strictLong(name) }
             }.toMap())
         require(accountList.size <= 100_000 && transactionList.size <= 500_000) { "备份记录数超出上限" }
         require(accountList.map { it.id }.toSet().size == accountList.size &&
             transactionList.map { it.id }.toSet().size == transactionList.size &&
-            transactionList.all { it.id > 0 && it.amountCents > 0 } &&
+            transactionList.all { it.id > 0 && it.amountCents > 0 && it.type in setOf("EXPENSE", "INCOME", "TRANSFER") &&
+                it.duplicateOfId != it.id && it.relatedTransactionId != it.id && it.bankFlow in setOf(null, "IN", "OUT") } &&
             accountList.all { it.id > 0 }) { "备份记录不完整" }
         val accountIds = accountList.map { it.id }.toSet()
         val transactionIds = transactionList.map { it.id }.toSet()
@@ -237,12 +329,35 @@ class LedgerBackup @Inject constructor(
                 (row.importBatchId == null || row.importBatchId in batchIds)
             } && checkpoints.all { it.accountId in accountIds } &&
             identities.all { it.transactionId in transactionIds }) { "备份关联关系不完整" }
+        require(checkpoints.map { it.id }.toSet().size == checkpoints.size && pending.map { it.id }.toSet().size == pending.size &&
+            transactionList.mapNotNull { it.clientRequestId }.let { it.size == it.toSet().size } &&
+            pending.all { it.transactionId == null || it.transactionId in transactionIds } &&
+            budget.monthlyTotalCents >= 0 && budget.perCategory.values.all { it >= 0 }) { "备份包含重复标识或无效预算" }
+        val byId = transactionList.associateBy { it.id }
+        require(transactionList.all { row -> row.duplicateOfId?.let { primaryId ->
+            val primary = byId.getValue(primaryId)
+            primary.duplicateOfId == null && (row.deletedAt != null || primary.deletedAt == null)
+        } ?: true }) { "备份存在循环或无效的重复关联" }
+        val returned = transactionList.filter { it.deletedAt == null && it.duplicateOfId == null &&
+            it.relationKind in setOf("REFUND", "REIMBURSEMENT") }
+        require(returned.all { row -> byId[row.relatedTransactionId]?.let {
+            it.type == "EXPENSE" && it.deletedAt == null && it.duplicateOfId == null && row.type == "INCOME"
+        } == true }) { "备份的退款原交易无效" }
+        require(returned.groupBy { it.relatedTransactionId }.all { (id, rows) ->
+            rows.fold(0L) { sum, row -> Math.addExact(sum, row.amountCents) } <= byId.getValue(id!!).amountCents
+        }) { "备份的退款金额超过原支出" }
         return Snapshot(accountList, transactionList, batches, identities, checkpoints, pending, budget)
     }
 
-    private fun JSONObject.nullLong(key: String): Long? = if (isNull(key)) null else getLong(key)
-    private fun JSONObject.nullInt(key: String): Int? = if (isNull(key)) null else getInt(key)
-    private fun JSONObject.nullString(key: String): String? = if (isNull(key)) null else getString(key)
+    private fun JSONObject.strictLong(name: String): Long {
+        val value = get(name).toString()
+        require(Regex("-?[0-9]+").matches(value)) { "备份整数金额或标识格式错误" }
+        return value.toLongOrNull() ?: error("备份数值超出范围")
+    }
+
+    private fun JSONObject.nullLong(key: String): Long? = if (!has(key) || isNull(key)) null else strictLong(key)
+    private fun JSONObject.nullInt(key: String): Int? = if (!has(key) || isNull(key)) null else getInt(key)
+    private fun JSONObject.nullString(key: String): String? = if (!has(key) || isNull(key)) null else getString(key)
 
     private fun limited(input: java.io.InputStream, limit: Int): ByteArray {
         val out = ByteArrayOutputStream()

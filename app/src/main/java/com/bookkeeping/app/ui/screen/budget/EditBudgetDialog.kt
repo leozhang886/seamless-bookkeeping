@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
@@ -30,6 +31,7 @@ import java.math.BigDecimal
 @Composable
 fun EditBudgetDialog(
     title: String,
+    busy: Boolean = false, error: String? = null,
     initialCents: Long = 0L,
     pickCategory: Boolean = false,
     excludeCategories: Set<TransactionCategory> = emptySet(),
@@ -37,11 +39,11 @@ fun EditBudgetDialog(
     onDismiss: () -> Unit,
     onConfirm: (category: TransactionCategory?, cents: Long) -> Unit,
 ) {
-    var amountText by remember {
+    var amountText by rememberSaveable {
         mutableStateOf(if (initialCents > 0) BigDecimal.valueOf(initialCents, 2).toPlainString() else "")
     }
-    var selectedCategory by remember { mutableStateOf(initialCategory) }
-    var menuExpanded by remember { mutableStateOf(false) }
+    var selectedCategory by rememberSaveable { mutableStateOf(initialCategory) }
+    var menuExpanded by rememberSaveable { mutableStateOf(false) }
 
     val amount = runCatching {
         BigDecimal(amountText.trim()).movePointRight(2).setScale(0).longValueExact()
@@ -56,10 +58,11 @@ fun EditBudgetDialog(
     }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!busy) onDismiss() },
         title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (error != null) Text(error, color = androidx.compose.material3.MaterialTheme.colorScheme.error)
                 if (pickCategory) {
                     ExposedDropdownMenuBox(
                         expanded = menuExpanded,
@@ -104,11 +107,11 @@ fun EditBudgetDialog(
         confirmButton = {
             TextButton(
                 onClick = { onConfirm(selectedCategory, amount ?: 0L) },
-                enabled = amountValid && categoryValid,
+                enabled = !busy && amountValid && categoryValid,
             ) { Text("保存") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("取消") }
         },
     )
 }

@@ -21,7 +21,7 @@ class UiFlowTest {
         compose.setContent {
             BookkeepingAppTheme {
                 AddTransactionDialog(accounts = emptyList(), onDismiss = {},
-                    onConfirm = { amount, _, _, _, _, _ ->
+                    onConfirm = { amount, _, _, _, _, _, _, _ ->
                         savedAmount = amount
                         saves++
                     })

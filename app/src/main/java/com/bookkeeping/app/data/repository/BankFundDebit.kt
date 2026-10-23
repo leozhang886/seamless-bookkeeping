@@ -21,7 +21,7 @@ internal fun balanceDeltaCents(transaction: TransactionEntity): Long? {
 }
 
 internal fun canLinkBalance(transaction: TransactionEntity): Boolean =
-    transaction.balanceTrackingVersion == 1 &&
+    transaction.balanceTrackingVersion == 1 && transaction.reviewReason == null &&
         (transaction.importKey == null || transaction.source in setOf(
             TransactionSource.ALIPAY.name, TransactionSource.WECHAT.name, TransactionSource.BANK_PDF.name)) &&
         balanceDeltaCents(transaction) != null
@@ -40,18 +40,22 @@ internal fun balanceEditImpactCents(
 }.toMap()
 
 internal fun eligibleBalanceAccount(account: AccountEntity, transaction: TransactionEntity): Boolean =
-    account.kind in when {
+    account.archivedAt == null && account.kind in when {
+        transaction.source != "MANUAL" && transaction.sourceAccountKind != null && transaction.source != "BANK_PDF" ->
+            if (transaction.sourceAccountKind in setOf("ALIPAY", "WECHAT")) setOf(transaction.sourceAccountKind) else emptySet()
         transaction.importKey != null -> when (transaction.source) {
             TransactionSource.BANK_PDF.name -> setOf("BANK")
-            TransactionSource.ALIPAY.name -> if (transaction.note.contains("[付款账户:其他方式]")) emptySet() else setOf("ALIPAY")
-            TransactionSource.WECHAT.name -> if (transaction.note.contains("[付款账户:其他方式]")) emptySet() else setOf("WECHAT")
+            TransactionSource.ALIPAY.name -> if (transaction.sourceAccountKind != null) setOf(transaction.sourceAccountKind)
+                else if (transaction.note.contains("[付款账户:其他方式]")) emptySet() else setOf("ALIPAY")
+            TransactionSource.WECHAT.name -> if (transaction.sourceAccountKind != null) setOf(transaction.sourceAccountKind)
+                else if (transaction.note.contains("[付款账户:其他方式]")) emptySet() else setOf("WECHAT")
             else -> emptySet()
         }
         else -> when (transaction.source) {
         TransactionSource.BANK_SMS.name, TransactionSource.BANK_APP.name -> setOf("BANK")
         TransactionSource.ALIPAY.name -> setOf("BANK", "ALIPAY")
         TransactionSource.WECHAT.name -> setOf("BANK", "WECHAT")
-        else -> setOf("BANK", "ALIPAY", "WECHAT")
+        else -> setOf("BANK", "ALIPAY", "WECHAT", "CASH")
         }
     } && transaction.timestamp > account.updatedAt
 
@@ -73,7 +77,8 @@ internal fun matchingAccountForLiveTransaction(
             }.singleOrNull()
         }
         TransactionSource.ALIPAY.name -> {
-            val explicit = if (transaction.importKey != null)
+            val explicit = if (transaction.sourceAccountKind != null) transaction.sourceAccountKind == "ALIPAY"
+            else if (transaction.importKey != null)
                 transaction.note.contains("[付款账户:支付宝余额]")
             else listOf("支付宝余额", "余额支付", "余额付款", "余额扣款", "余额收款")
                 .any(transaction.note::contains)
@@ -81,7 +86,8 @@ internal fun matchingAccountForLiveTransaction(
                 candidates.filter { it.kind == "ALIPAY" }.singleOrNull() else null
         }
         TransactionSource.WECHAT.name -> {
-            val explicit = if (transaction.importKey != null)
+            val explicit = if (transaction.sourceAccountKind != null) transaction.sourceAccountKind == "WECHAT"
+            else if (transaction.importKey != null)
                 transaction.note.contains("[付款账户:微信零钱]")
             else listOf("微信零钱", "零钱支付", "零钱付款", "零钱扣款", "零钱收款")
                 .any(transaction.note::contains)

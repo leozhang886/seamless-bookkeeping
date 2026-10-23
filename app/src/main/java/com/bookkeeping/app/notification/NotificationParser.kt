@@ -17,18 +17,18 @@ import java.math.BigDecimal
 //   - 微信收到转账：   title="微信支付"   text="向你付款 100.00 元"  (别人付给你)
 //   - 微信收转账：     text="收到 张三 的转账 100.00 元"
 //
-// ⚠️ 局限 1：微信扫码收款从 2020 后不再发系统通知（改 app 内提示）。
-// ⚠️ 局限 2：支付宝转账入账（"某某给你转了一笔钱，点击查看详细信息"）通知文本不含金额，
-//            extractAmount 会返回 null，整条通知被丢弃。
-// 两个场景都需要 AccessibilityService 兜底（task #11）。
+// 只能读取系统实际投递的通知；应用内提示或不含金额的通知不能可靠生成草稿。
+// 缺失记录通过原始账单导入核对，本项目不使用无障碍抓取兜底。
 object NotificationParser {
 
     private const val PKG_ALIPAY = "com.eg.android.AlipayGphone"
     private const val PKG_WECHAT = "com.tencent.mm"
 
     // 金额提取：只匹配带 ￥/¥ 前缀或后缀"元"的数字，避免误匹配日期等
-    private val AMOUNT_REGEX_SYMBOL = Regex("""[¥￥]\s*([0-9]+(?:\.[0-9]{1,2})?)""")
-    private val AMOUNT_REGEX_YUAN = Regex("""([0-9]+(?:\.[0-9]{1,2})?)\s*元""")
+    private const val NUMBER = "(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\\.[0-9]{1,2})?"
+    private val AMOUNT_REGEX_SYMBOL = Regex("[¥￥]\\s*($NUMBER)(?![0-9.,])")
+    private val AMOUNT_REGEX_YUAN = Regex("(?<![0-9.,])($NUMBER)(?![0-9.,])\\s*元")
+    private val ACTUAL_AMOUNT = Regex("(?:实际付款|实际支付|实付|实际扣款|付款成功|支付成功|成功付款|已支付|收到退款|退款成功|成功收款|收款成功|向你付款|向您付款|扣款金额)\\s*[:：]?\\s*(?:人民币)?[¥￥]?\\s*($NUMBER)(?![0-9.,])\\s*(?:元)?")
 
     // 收入关键词
     private val INCOME_KEYWORDS = listOf(
@@ -96,7 +96,9 @@ object NotificationParser {
     ): TransactionEntity? {
         if (full.isBlank()) return null
         if (FAILED_KEYWORDS.any(full::contains)) return null
-        if (PROMOTION_KEYWORDS.any(full::contains)) return null
+        val completed = INCOME_KEYWORDS.any(full::contains) || EXPENSE_KEYWORDS.any(full::contains) ||
+            PAY_TO_MERCHANT_REGEX.containsMatchIn(full)
+        if (PROMOTION_KEYWORDS.any(full::contains) && !completed) return null
         // 单说“收到红包”“返现”“到账”可能指优惠资格，不能证明钱已经入账。
         if ((full.contains("红包") || full.contains("返现")) &&
             INCOME_KEYWORDS.none(full::contains) && EXPENSE_KEYWORDS.none(full::contains)) return null
@@ -133,13 +135,14 @@ object NotificationParser {
     }
 
     private fun extractAmountCents(text: String): Long? {
-        val value = AMOUNT_REGEX_SYMBOL.find(text)?.groupValues?.get(1)
-            ?: AMOUNT_REGEX_YUAN.find(text)?.groupValues?.get(1)
-            ?: return null
-        return runCatching {
-            val cents = BigDecimal(value).movePointRight(2).setScale(0).longValueExact()
-            cents.takeIf { it > 0 }
-        }.getOrNull()
+        fun cents(value: String): Long? = runCatching {
+            BigDecimal(value.replace(",", "")).movePointRight(2).setScale(0).longValueExact()
+        }.getOrNull()?.takeIf { it in 1..com.bookkeeping.app.data.repository.MAX_TRANSACTION_CENTS }
+        val explicit = ACTUAL_AMOUNT.findAll(text).mapNotNull { cents(it.groupValues[1]) }.distinct().toList()
+        if (explicit.isNotEmpty()) return explicit.singleOrNull()
+        val amounts = (AMOUNT_REGEX_SYMBOL.findAll(text) + AMOUNT_REGEX_YUAN.findAll(text))
+            .mapNotNull { cents(it.groupValues[1]) }.distinct().toList()
+        return amounts.singleOrNull()
     }
 
     private fun extractMerchant(text: String): String {

@@ -10,6 +10,7 @@ data class BillParseReport(
     val originalRows: Int,
     val ignoredRows: Int,
     val rejected: List<BillRowIssue>,
+    val blockingErrors: List<String> = emptyList(),
 ) {
     val amountCents: Long get() = records.fold(0L) { total, row -> Math.addExact(total, row.amountCents) }
 }

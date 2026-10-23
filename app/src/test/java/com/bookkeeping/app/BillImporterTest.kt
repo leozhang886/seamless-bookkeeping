@@ -65,7 +65,7 @@ class BillImporterTest {
         assertEquals("便利店,上海", bills[0].merchant)
         assertEquals(TransactionType.EXPENSE.name, bills[0].type)
         assertTrue(bills[0].note.contains("[付款账户:微信零钱]"))
-        assertEquals(SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA).parse("2026-10-15 12:34:56")!!.time, bills[0].timestamp)
+        assertEquals(SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA).apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") }.parse("2026-10-15 12:34:56")!!.time, bills[0].timestamp)
         assertNotNull(bills[0].importKey)
     }
 
@@ -104,5 +104,23 @@ class BillImporterTest {
         }
         val failure = runCatching { BillImporter.parse(ByteArrayInputStream(buffer.toByteArray()), "账单.xlsx") }.exceptionOrNull()
         assertTrue(failure is IllegalArgumentException)
+    }
+    @Test fun fundSubscriptionIsInternalMovementAndPaymentEvidenceSurvivesNoteEditing() {
+        val csv = "支付宝账单\n交易时间,交易对方,商品说明,收/支,金额(元),收/付款方式,交易状态,交易订单号\n" +
+            "2026-10-15 10:00:00,基金公司,基金申购,支出,100.00,建设银行卡,交易成功,FUND001\n"
+        val row = BillImporter.parse(ByteArrayInputStream(csv.toByteArray()), "支付宝.csv").single()
+        assertEquals("TRANSFER", row.type)
+        assertEquals("OUT", row.bankFlow)
+        assertEquals("OTHER", row.sourceAccountKind)
+        assertNotNull(row.rawData)
+    }
+    @Test fun chineseStatementDatesDoNotChangeWithDeviceTimezone() {
+        val old = java.util.TimeZone.getDefault()
+        try {
+            java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("America/Los_Angeles"))
+            val csv = "微信支付账单\n交易时间,交易对方,收/支,金额(元),支付方式,交易单号\n2026-01-01 00:01:00,商户,支出,12.00,零钱,ZONE1\n"
+            val row = BillImporter.parse(ByteArrayInputStream(csv.toByteArray()), "微信.csv").single()
+            assertEquals(java.time.Instant.parse("2025-12-31T16:01:00Z").toEpochMilli(), row.timestamp)
+        } finally { java.util.TimeZone.setDefault(old) }
     }
 }

@@ -16,17 +16,28 @@ android {
 
     defaultConfig {
         applicationId = "com.bookkeeping.localassets"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 35
-        versionCode = 14
-        versionName = "1.13"
+        versionCode = 15
+        versionName = "1.14"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Optional release credentials come only from the build environment.
+    val releaseStore = providers.environmentVariable("BOOKKEEPING_KEYSTORE_PATH").orNull
+    if (!releaseStore.isNullOrBlank()) {
+        signingConfigs.create("privateRelease") {
+            storeFile = file(releaseStore)
+            storePassword = providers.environmentVariable("BOOKKEEPING_KEYSTORE_PASSWORD").orNull
+            keyAlias = providers.environmentVariable("BOOKKEEPING_KEY_ALIAS").orNull
+            keyPassword = providers.environmentVariable("BOOKKEEPING_KEY_PASSWORD").orNull
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (!releaseStore.isNullOrBlank()) signingConfig = signingConfigs.getByName("privateRelease")
         }
     }
     compileOptions {
@@ -40,6 +51,7 @@ android {
         compose = true
         buildConfig = true   // 启用 BuildConfig.DEBUG 用于日志门控
     }
+    testOptions { unitTests.isIncludeAndroidResources = true }
 }
 
 dependencies {
@@ -77,14 +89,12 @@ dependencies {
     // DataStore
     implementation(libs.androidx.datastore.preferences)
 
-    // Vico 图表
-    implementation(libs.vico.compose.m3)
-
     // 解析银行导出的文字版 PDF 流水。
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 
     // 测试
     testImplementation(libs.junit)
+    testImplementation("org.robolectric:robolectric:4.14.1")
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

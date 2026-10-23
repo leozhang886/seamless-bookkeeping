@@ -25,7 +25,7 @@ class LedgerMigrationTest {
         legacy.version = 4
         legacy.close()
         val db = Room.databaseBuilder(context, BookkeepingDatabase::class.java, name)
-            .addMigrations(BookkeepingDatabase.MIGRATION_4_5).build()
+            .addMigrations(BookkeepingDatabase.MIGRATION_4_5, BookkeepingDatabase.MIGRATION_5_6).build()
         try {
             val row = db.transactionDao().getById(1)!!
             assertEquals(1234L, row.amountCents)

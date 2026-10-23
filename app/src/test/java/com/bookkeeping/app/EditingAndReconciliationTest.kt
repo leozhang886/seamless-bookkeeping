@@ -50,7 +50,7 @@ class EditingAndReconciliationTest {
     }
 
     @Test fun transferCannotAccidentallyBecomeIncome() {
-        val transfer = expense.copy(type = "TRANSFER", category = "TRANSFER", bankFlow = "OUT")
+        val transfer = expense.copy(type = "TRANSFER", category = "TRANSFER", bankFlow = "OUT", relationKind = "TRANSFER_OUT")
         assertNull(editedTransaction(transfer, 2000, TransactionType.INCOME,
             TransactionCategory.OTHER, "", "", bank.id))
         assertNull(editedTransaction(expense, 0, TransactionType.EXPENSE,

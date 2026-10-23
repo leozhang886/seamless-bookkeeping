@@ -28,3 +28,11 @@ local.properties
 *.xlsx
 *.pdf
 .codex-remote-attachments/
+
+# 私有账本、加密备份和签名配置
+*.sbk
+*.db
+*.db-wal
+*.db-shm
+keystore.properties
+signing.properties

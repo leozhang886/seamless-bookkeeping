@@ -3,6 +3,7 @@ package com.bookkeeping.app.data.local.entity
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import androidx.room.Index
+import androidx.room.ColumnInfo
 
 @Entity(tableName = "pending_notifications", indices = [Index(value = ["fingerprint"], unique = true)])
 data class PendingNotificationEntity(
@@ -18,4 +19,12 @@ data class PendingNotificationEntity(
     val source: String,
     val confidence: Int,
     val status: String = "PENDING",
+    @ColumnInfo(defaultValue = "1") val parserVersion: Int = 2,
+    val sourceAccount: String? = null,
+    val sourceAccountKind: String? = null,
+    val bankFlow: String? = null,
+    val relationKind: String? = null,
+    val receivedAt: Long? = null,
+    val eventKey: String? = null,
+    val transactionId: Long? = null,
 )

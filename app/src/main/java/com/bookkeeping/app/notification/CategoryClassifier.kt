@@ -11,6 +11,9 @@ object CategoryClassifier {
 
     // 关键词分组。顺序敏感：更明确的规则放前面（如"工资到账"应该早于通用的"到账"）
     private val RULES: List<Pair<List<String>, TransactionCategory>> = listOf(
+        listOf("美团单车", "共享单车", "哈啰", "青桔") to TransactionCategory.TRANSPORT,
+        listOf("流量充值", "话费充值", "手机话费", "宽带", "燃气费", "电费", "水费") to TransactionCategory.UTILITIES,
+        listOf("Apple Music", "苹果音乐") to TransactionCategory.ENTERTAINMENT,
         // 工资 / 收入相关（优先匹配，避免被其他分类抢走）
         listOf("工资", "薪资", "薪水", "代发", "奖金", "津贴", "年终") to TransactionCategory.SALARY,
 

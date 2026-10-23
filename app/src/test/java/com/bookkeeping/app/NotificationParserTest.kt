@@ -36,4 +36,10 @@ class NotificationParserTest {
         assertNull(NotificationParser.parse(alipay, "活动提醒", "限时活动，奖励20元", 5L))
         assertNull(NotificationParser.parse(alipay, "支付宝", "支付失败￥20.00", 6L))
     }
+    @Test fun commaAmountAndDiscountedActualPaymentAreExact() {
+        assertEquals(123456L, NotificationParser.parse(alipay, "付款成功", "付款成功￥1,234.56 商店", 10)!!.amountCents)
+        assertEquals(1200L, NotificationParser.parse(alipay, "付款成功", "原价32.00元，优惠券20.00元，实付12.00元", 10)!!.amountCents)
+        assertNull(NotificationParser.parse(alipay, "付款成功", "消费10元，消费20元", 10))
+        assertNull(NotificationParser.parse(alipay, "付款成功", "￥12,34.56", 10))
+    }
 }

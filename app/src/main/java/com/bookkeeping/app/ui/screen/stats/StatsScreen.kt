@@ -14,6 +14,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.runtime.remember
+import com.bookkeeping.app.ui.components.*
+import com.bookkeeping.app.ui.screen.transactions.TransactionViewModel
+import com.bookkeeping.app.ui.screen.transactions.AddTransactionDialog
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -43,6 +49,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.bookkeeping.app.data.local.entity.TransactionCategory
 import com.bookkeeping.app.data.local.entity.TransactionEntity
 import com.bookkeeping.app.data.local.entity.TransactionType
+import com.bookkeeping.app.ui.theme.sourceLabel
 import com.bookkeeping.app.ui.theme.formatYuan
 import java.math.BigDecimal
 import java.text.SimpleDateFormat
@@ -51,7 +58,13 @@ import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
+fun StatsScreen(viewModel: StatsViewModel = hiltViewModel(), ledger: TransactionViewModel = hiltViewModel()) {
+    val originals by ledger.allTransactions.collectAsState()
+    val accounts by ledger.accountList.collectAsState()
+    var detailId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var editId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var editError by remember { mutableStateOf<String?>(null) }
+    var showCharts by rememberSaveable { mutableStateOf(false) }
     val stats by viewModel.categoryStats.collectAsState()
     val totalCents by viewModel.totalCents.collectAsState()
     val viewingType by viewModel.viewingType.collectAsState()
@@ -63,7 +76,7 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
     BackHandler(enabled = selectedCategory != null) { selectedCategoryName = null }
 
     Scaffold(topBar = { TopAppBar(
-        title = { Text(selectedCategory?.displayName ?: "本月统计", style = MaterialTheme.typography.headlineSmall) },
+        title = { Text(selectedCategory?.displayName ?: "统计", style = MaterialTheme.typography.headlineSmall) },
         navigationIcon = {
             if (selectedCategory != null) IconButton(onClick = { selectedCategoryName = null }) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回统计")
@@ -77,6 +90,7 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
                 viewingType = viewingType,
                 transactions = categoryTransactions(monthlyTransactions, viewingType, selectedCategory),
                 modifier = Modifier.padding(innerPadding),
+                onOpen = { detailId = it.id },
             )
             return@Scaffold
         }
@@ -85,6 +99,7 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
+            MonthSelector(viewModel.period)
             // 收入/支出 切换
             Row(
                 modifier = Modifier
@@ -104,6 +119,8 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
                 )
             }
 
+            Text("按净消费统计：退款和报销抵减原支出月份，转账与待核对流水不计入。",
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp))
             // 总金额卡片
             TotalCard(totalCents = totalCents, type = viewingType)
 
@@ -119,6 +136,33 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
+                    // 分类明细列表
+                    item(key = "sort_controls") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("分类排行", modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.titleSmall)
+                            FilterChip(
+                                selected = !sortAscending,
+                                onClick = { sortAscending = false },
+                                label = { Text("金额降序") },
+                            )
+                            FilterChip(
+                                selected = sortAscending,
+                                onClick = { sortAscending = true },
+                                label = { Text("金额升序") },
+                            )
+                        }
+                    }
+                    items(sortedStats, key = { it.category.name }) { stat ->
+                        CategoryStatRow(stat = stat, viewingType = viewingType,
+                            onClick = { selectedCategoryName = stat.category.name })
+                    }
+                    item { TextButton(onClick = { showCharts = !showCharts }) { Text(if (showCharts) "收起图表" else "查看图表与每日数据") } }
+                    if (showCharts) {
                     // 饼图
                     item(key = "pie_chart") {
                         Card(modifier = Modifier.fillMaxWidth()) {
@@ -156,41 +200,43 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
                             }
                         }
                     }
-                    // 分类明细列表
-                    item(key = "sort_controls") {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("分类排行", modifier = Modifier.weight(1f),
-                                style = MaterialTheme.typography.titleSmall)
-                            FilterChip(
-                                selected = !sortAscending,
-                                onClick = { sortAscending = false },
-                                label = { Text("金额降序") },
-                            )
-                            FilterChip(
-                                selected = sortAscending,
-                                onClick = { sortAscending = true },
-                                label = { Text("金额升序") },
-                            )
+                        items(dailyTotals.filter { it.totalCents > 0 }, key = { "day_${it.day}" }) { day ->
+                            Text("${day.day}日 · ¥${formatYuan(day.totalCents)}", style = MaterialTheme.typography.bodySmall)
                         }
-                    }
-                    items(sortedStats, key = { it.category.name }) { stat ->
-                        CategoryStatRow(stat = stat, viewingType = viewingType,
-                            onClick = { selectedCategoryName = stat.category.name })
                     }
                 }
             }
         }
     }
+    detailId?.let { id -> originals.firstOrNull { it.id == id }?.let { original ->
+        val net = monthlyTransactions.firstOrNull { it.id == id }?.amountCents ?: original.amountCents
+        AlertDialog(onDismissRequest = { detailId = null }, title = { Text(original.merchant.ifBlank { "交易详情" }) },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("原始金额 ¥${formatYuan(original.amountCents)}")
+                if (original.type == "EXPENSE") Text("抵减退款与报销后 ¥${formatYuan(net)}")
+                Text(ledgerDate(original.timestamp))
+                Text(accounts.firstOrNull { it.id == original.balanceAccountId }?.name ?: original.account.orEmpty())
+                Text("来源 ${sourceLabel(original.source)}")
+                Text(original.note)
+            } }, confirmButton = { TextButton(onClick = { editId = id; detailId = null; editError = null }) { Text("编辑原始流水") } },
+            dismissButton = { TextButton(onClick = { detailId = null }) { Text("关闭") } })
+    } }
+    editId?.let { id -> originals.firstOrNull { it.id == id }?.let { original ->
+        AddTransactionDialog(accounts, original, errorMessage = editError, onDismiss = { editId = null },
+            onConfirm = { amount, type, category, merchant, note, accountId, at, _ ->
+                editError = null
+                ledger.editTransaction(id, amount, type, category, merchant, note, accountId, at) {
+                    if (it) editId = null else editError = "保存失败，请核对退款额度和账户。"
+                }
+            })
+    } }
+
 }
 
 @Composable
 private fun TotalCard(totalCents: Long, type: TransactionType) {
     val sign = if (type == TransactionType.INCOME) "+" else "−"
-    val label = if (type == TransactionType.INCOME) "本月总收入" else "本月总支出"
+    val label = if (type == TransactionType.INCOME) "所选月份总收入" else "所选月份净支出"
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -278,6 +324,7 @@ private fun CategoryDetails(
     viewingType: TransactionType,
     transactions: List<TransactionEntity>,
     modifier: Modifier = Modifier,
+    onOpen: (TransactionEntity) -> Unit,
 ) {
     val totalCents = transactions.sumOf { it.amountCents }
     val sign = if (viewingType == TransactionType.INCOME) "+" else "−"
@@ -292,7 +339,7 @@ private fun CategoryDetails(
         item(key = "summary") {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
                 Column(Modifier.fillMaxWidth().padding(20.dp)) {
-                    Text("本月$typeLabel · ${category.displayName} · ${transactions.size} 笔",
+                    Text("所选月份$typeLabel · ${category.displayName} · ${transactions.size} 笔",
                         style = MaterialTheme.typography.labelLarge)
                     Text("$sign¥${formatYuan(totalCents)}",
                         style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold,
@@ -301,7 +348,7 @@ private fun CategoryDetails(
             }
         }
         items(transactions, key = { it.id }) { transaction ->
-            Card(modifier = Modifier.fillMaxWidth()) {
+            Card(modifier = Modifier.fillMaxWidth(), onClick = { onOpen(transaction) }) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(transaction.merchant.ifBlank { "未填写商户" },
@@ -310,7 +357,7 @@ private fun CategoryDetails(
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold, color = amountColor)
                     }
-                    Text(detailDateFormat.format(Date(transaction.timestamp)),
+                    Text(ledgerDate(transaction.timestamp),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (transaction.note.isNotBlank()) Text(transaction.note,
@@ -322,13 +369,12 @@ private fun CategoryDetails(
     }
 }
 
-private val detailDateFormat = SimpleDateFormat("yyyy年M月d日 HH:mm", Locale.getDefault())
 
 @Composable
 private fun EmptyStats(type: TransactionType) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Text(
-            text = if (type == TransactionType.INCOME) "本月还没有收入" else "本月还没有支出",
+            text = if (type == TransactionType.INCOME) "所选月份没有收入" else "所选月份没有支出",
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

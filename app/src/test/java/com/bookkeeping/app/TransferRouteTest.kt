@@ -8,7 +8,7 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class TransferRouteTest {
-    @Test fun bankFundPurchaseShowsBothSides() {
+    @Test fun bankFundPurchaseExplainsManualValuation() {
         val purchase = TransactionEntity(
             amountCents = 4080,
             type = TransactionType.TRANSFER.name,
@@ -18,7 +18,7 @@ class TransferRouteTest {
             account = "建设银行（尾号1234）",
             timestamp = 1L,
         )
-        assertEquals("建设银行（尾号1234） −¥40.80 → 基金 +¥40.80", transferRoute(purchase))
+        assertEquals("建设银行（尾号1234） −¥40.80 → 基金（市值手动更新）", transferRoute(purchase))
         assertNull(transferRoute(purchase.copy(type = TransactionType.INCOME.name)))
     }
 
