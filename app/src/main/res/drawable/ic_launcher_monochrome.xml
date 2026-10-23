@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- Knockouts preserve the ledger and currency details under system tinting. -->
+    <path android:fillColor="#FFFFFF" android:fillType="evenOdd"
+        android:pathData="M40,29 H68 Q76,29 76,37 V71 Q76,79 68,79 H40 Q32,79 32,71 V37 Q32,29 40,29 Z M41,34 H44 V74 H41 Z M48,46 L57,56 L66,46 L68,48 L60,58 H66 V61 H59 V64 H66 V67 H59 V72 H55 V67 H48 V64 H55 V61 H48 V58 H54 L46,48 Z" />
+</vector>

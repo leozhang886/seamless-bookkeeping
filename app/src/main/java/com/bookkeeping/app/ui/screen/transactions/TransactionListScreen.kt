@@ -122,8 +122,10 @@ fun TransactionListScreen(
     }
 
     Scaffold(
+        contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
         snackbarHost = { SnackbarHost(snackbarHost) },
         topBar = { TopAppBar(
+            windowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
             title = { Text("账单", style = MaterialTheme.typography.headlineSmall) },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
         ) },
@@ -135,61 +137,55 @@ fun TransactionListScreen(
             }
         }
     ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            if (message.isNotBlank()) Text(message, modifier = Modifier.padding(horizontal = 16.dp),
-                color = MaterialTheme.colorScheme.primary)
-            MonthSelector(viewModel.period)
-            // 顶部统计卡片（基于全月数据，不受 filter 影响）
-            MonthlySummaryCard(
-                monthlyExpenseCents = monthlyExpense,
-                monthlyIncomeCents = monthlyIncome,
-            )
+        GroupedTransactionList(
+            modifier = Modifier.fillMaxSize().padding(innerPadding),
+            header = {
+                Column {
+                    if (message.isNotBlank()) Text(message, modifier = Modifier.padding(horizontal = 16.dp),
+                        color = MaterialTheme.colorScheme.primary)
+                    MonthSelector(viewModel.period)
+                    // 顶部统计卡片（基于全月数据，不受 filter 影响）
+                    MonthlySummaryCard(
+                        monthlyExpenseCents = monthlyExpense,
+                        monthlyIncomeCents = monthlyIncome,
+                    )
 
-            OutlinedTextField(query, viewModel::setQuery, label = { Text("搜索商户、备注或订单号") },
-                singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
-            Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
-                FilterChip(showAll, onClick = { viewModel.setShowAll(!showAll) }, label = { Text("跨月搜索") })
-                TextButton(onClick = { showFilters = true }) { Text("筛选") }
-                TextButton(onClick = viewModel::clearFilters) { Text("清除筛选") }
-                TextButton(onClick = { showTrash = true }) { Text("回收站") }
-            }
-            // 分类筛选 chip 行
-            CategoryFilterRow(
-                selected = selectedCategory,
-                onSelect = viewModel::setCategoryFilter,
-            )
-            TextButton(onClick = { formError = null; showTransferDialog = true }, modifier = Modifier.padding(horizontal = 16.dp)) {
-                Text("账户转账")
-            }
+                    OutlinedTextField(query, viewModel::setQuery, label = { Text("搜索商户、备注或订单号") },
+                        singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+                    Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+                        FilterChip(showAll, onClick = { viewModel.setShowAll(!showAll) }, label = { Text("跨月搜索") })
+                        TextButton(onClick = { showFilters = true }) { Text("筛选") }
+                        TextButton(onClick = viewModel::clearFilters) { Text("清除筛选") }
+                        TextButton(onClick = { showTrash = true }) { Text("回收站") }
+                    }
+                    // 分类筛选 chip 行
+                    CategoryFilterRow(
+                        selected = selectedCategory,
+                        onSelect = viewModel::setCategoryFilter,
+                    )
+                    TextButton(onClick = { formError = null; showTransferDialog = true }, modifier = Modifier.padding(horizontal = 16.dp)) {
+                        Text("账户转账")
+                    }
 
-            if (transactions.isEmpty()) {
-                EmptyState(filterActive = true)
-            } else {
-                // 按日期分组渲染
-                GroupedTransactionList(
-                    transactions = transactions,
-                    allTransactions = allTransactions,
-                    onDelete = { tx -> viewModel.delete(tx) {
-                        scope.launch {
-                            if (snackbarHost.showSnackbar("已删除流水", "撤销") == SnackbarResult.ActionPerformed)
-                                viewModel.restore(tx.id)
-                        }
-                    } },
-                    accounts = accounts,
-                    onReview = { reviewingId = it.id },
-                    onEdit = { editingId = it.id; editError = null },
-                    onDuplicateReview = { duplicateReviewId = it.id; viewModel.findDuplicates(it.id) },
-                    onUnlinkDuplicate = { viewModel.unlinkDuplicate(it.id) },
-                    onReturnReview = { returnReviewId = it.id },
-                    onUnlinkReturn = { viewModel.unlinkReturn(it.id) },
-                    onMarkOrdinaryIncome = { viewModel.markOrdinaryIncome(it.id) },
-                )
-            }
-        }
+                }
+            },
+            transactions = transactions,
+            allTransactions = allTransactions,
+            onDelete = { tx -> viewModel.delete(tx) {
+                scope.launch {
+                    if (snackbarHost.showSnackbar("已删除流水", "撤销") == SnackbarResult.ActionPerformed)
+                        viewModel.restore(tx.id)
+                }
+            } },
+            accounts = accounts,
+            onReview = { reviewingId = it.id },
+            onEdit = { editingId = it.id; editError = null },
+            onDuplicateReview = { duplicateReviewId = it.id; viewModel.findDuplicates(it.id) },
+            onUnlinkDuplicate = { viewModel.unlinkDuplicate(it.id) },
+            onReturnReview = { returnReviewId = it.id },
+            onUnlinkReturn = { viewModel.unlinkReturn(it.id) },
+            onMarkOrdinaryIncome = { viewModel.markOrdinaryIncome(it.id) },
+        )
     }
     duplicateReview?.let { tx -> AlertDialog(
         onDismissRequest = { duplicateReviewId = null; viewModel.clearSuggestions() },
@@ -413,6 +409,8 @@ private fun CategoryFilterRow(
 
 @Composable
 private fun GroupedTransactionList(
+    modifier: Modifier = Modifier,
+    header: @Composable () -> Unit,
     transactions: List<TransactionEntity>,
     allTransactions: List<TransactionEntity>,
     onDelete: (TransactionEntity) -> Unit,
@@ -436,17 +434,24 @@ private fun GroupedTransactionList(
     }
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        modifier = modifier,
+        contentPadding = PaddingValues(top = 8.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        item(key = "ledger_controls", contentType = "controls") { header() }
+        if (transactions.isEmpty()) item(key = "ledger_empty", contentType = "empty") {
+            EmptyState(filterActive = true)
+        }
         groups.forEach { (dayKey, dayItems) ->
             // 每组的头部：日期 + 当日合计
             item(key = "header_$dayKey") {
-                DayHeader(dayKey = dayKey, items = dayItems, refunds = refunds)
+                Box(Modifier.padding(horizontal = 16.dp)) {
+                    DayHeader(dayKey = dayKey, items = dayItems, refunds = refunds)
+                }
             }
             // 该组内的交易项
-            items(dayItems, key = { it.id }) { tx ->
+            items(dayItems, key = { it.id }, contentType = { "transaction" }) { tx ->
+                Box(Modifier.padding(horizontal = 16.dp)) {
                 TransactionItem(transaction = tx, onDelete = { onDelete(tx) }, accounts = accounts,
                     onReview = { onReview(tx) }, onEdit = { onEdit(tx) },
                     onDuplicateReview = { onDuplicateReview(tx) },
@@ -454,6 +459,7 @@ private fun GroupedTransactionList(
                     onReturnReview = { onReturnReview(tx) },
                     onUnlinkReturn = { onUnlinkReturn(tx) },
                     onMarkOrdinaryIncome = { onMarkOrdinaryIncome(tx) })
+                }
             }
         }
     }
@@ -626,7 +632,7 @@ private fun TransactionItem(
 
 @Composable
 private fun EmptyState(filterActive: Boolean) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    Box(modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 text = if (filterActive) "该分类下还没有记录" else "还没有账单",

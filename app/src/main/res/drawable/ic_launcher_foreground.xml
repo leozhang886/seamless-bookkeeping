@@ -1,19 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  Adaptive icon 前景层：白色 ¥ 符号，居中在 108x108 viewport。
-  内容必须落在中心 66x66 安全区（约 21~87），否则系统裁切时会被切掉边角。
-  笔画粗 9dp + 圆头，视觉更厚实。
--->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path
-        android:fillColor="#00000000"
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="9"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:pathData="M 38,32 L 54,54 L 70,32 M 54,54 L 54,82 M 36,62 L 72,62 M 36,72 L 72,72" />
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- All artwork stays inside the adaptive icon safe circle. -->
+    <path android:fillColor="#F7F9EF" android:pathData="M40,29 H68 Q76,29 76,37 V71 Q76,79 68,79 H40 Q32,79 32,71 V37 Q32,29 40,29 Z" />
+    <path android:fillColor="#D4E5D5" android:pathData="M41,29 H44 V79 H41 Z" />
+    <path android:fillColor="#A5D7B3" android:pathData="M62,29 H69 V43 L65.5,40 L62,43 Z" />
+    <path android:fillColor="#00000000" android:strokeColor="#246448"
+        android:strokeWidth="3.2" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M49,47 L57,57 L65,47 M57,57 V70 M50,59 H64 M50,65 H64" />
 </vector>

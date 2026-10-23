@@ -32,6 +32,8 @@ APK 在 `app/build/outputs/apk/debug/app-debug.apk`。安装和升级步骤见 [
 
 ## 本次升级与验证
 
+1.14.1（versionCode 16）更新绿色账本启动图标，并将账单页的汇总、搜索、筛选和流水合并到同一滚动区域，解决流水被挤在屏幕底部的问题。数据库仍为 v6。本轮验证 APK 构建、图标资源和升级签名；手机桌面图标裁切与列表滚动体验待实机确认。
+
 1.14（versionCode 15）将数据库升级到 v6，保留原流水及导入身份。详情见 [实施与验证记录](实施进度.md)。自动测试覆盖 v1～v5 升级到 v6、跨来源重复候选、退款上限、提交重试、恢复失败回滚与合成数据量检查。测试 APK 编译通过不代表已经完成手机 UI 测试。
 
 仓库内的 GitHub Actions 检查测试、lint、APK 构建和 Room schema 差异。CI 不持有发布密钥，也不发布用户数据。正式签名可通过构建环境提供 `BOOKKEEPING_KEYSTORE_PATH`、`BOOKKEEPING_KEYSTORE_PASSWORD`、`BOOKKEEPING_KEY_ALIAS`、`BOOKKEEPING_KEY_PASSWORD`；不要把值写进仓库。未提供时 release 构建不签名。当前交付仍使用原调试签名以保持升级连续性。
