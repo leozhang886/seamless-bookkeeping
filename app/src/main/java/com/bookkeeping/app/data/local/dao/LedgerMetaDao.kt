@@ -8,11 +8,21 @@ import com.bookkeeping.app.data.local.entity.BalanceCheckpointEntity
 import com.bookkeeping.app.data.local.entity.ImportBatchEntity
 import com.bookkeeping.app.data.local.entity.ImportIdentityEntity
 import com.bookkeeping.app.data.local.entity.PendingNotificationEntity
+import com.bookkeeping.app.data.local.entity.DuplicateLinkChangeEntity
 import com.bookkeeping.app.data.local.entity.BudgetEntryEntity
 import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface LedgerMetaDao {
+    @Insert suspend fun insertDuplicateChange(change: DuplicateLinkChangeEntity)
+    @Query("SELECT * FROM duplicate_link_changes WHERE secondaryId = :secondaryId ORDER BY transactionId")
+    suspend fun duplicateChanges(secondaryId: Long): List<DuplicateLinkChangeEntity>
+    @Query("SELECT * FROM duplicate_link_changes ORDER BY secondaryId, transactionId")
+    suspend fun allDuplicateChanges(): List<DuplicateLinkChangeEntity>
+    @Query("DELETE FROM duplicate_link_changes WHERE secondaryId = :secondaryId")
+    suspend fun deleteDuplicateChanges(secondaryId: Long)
+    @Query("DELETE FROM duplicate_link_changes") suspend fun clearDuplicateChanges()
+
     @Query("SELECT * FROM budget_entries") fun observeBudgets(): Flow<List<BudgetEntryEntity>>
     @Query("SELECT * FROM budget_entries") suspend fun allBudgets(): List<BudgetEntryEntity>
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putBudget(entry: BudgetEntryEntity)

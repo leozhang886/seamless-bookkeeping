@@ -107,7 +107,7 @@ class TransactionViewModel @Inject constructor(
         repository.linkDuplicate(firstId, secondId).also { _message.value = if (it) "已关联同一资金流水，只计一次" else "无法关联，请核对方向、账户，或先解除已有关系" }
     }
     fun confirmIndependent(id: Long, onResult: (Boolean) -> Unit = {}) = action(onResult) { repository.confirmIndependent(id).also { _message.value = if (it) "已确认独立交易，统计和余额已刷新" else "核对失败" } }
-    fun unlinkDuplicate(id: Long) = action { repository.unlinkDuplicate(id).also { _message.value = if (it) "已取消关联，请确认是否为独立交易" else "取消失败" } }
+    fun unlinkDuplicate(id: Long) = action { repository.unlinkDuplicate(id).also { _message.value = if (it) "已取消关联，请确认是否为独立交易" else "无法安全取消：旧关联缺少退款原归属，或关联后退款已更改。请先核对，原记录已保留。" } }
     fun createTransfer(fromId: Long, toId: Long?, cents: Long, fee: Long, note: String,
         at: Long = System.currentTimeMillis(), requestId: String? = null, onResult: (Boolean) -> Unit = {}) = action(onResult) {
         repository.createTransfer(fromId, toId, cents, fee, note, at, requestId).also { _message.value = if (it) "转账已保存，疑似重复资金腿请先核对" else "保存失败，请检查账户和金额" }

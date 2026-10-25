@@ -7,6 +7,7 @@ import com.bookkeeping.app.data.local.dao.TransactionDao
 import com.bookkeeping.app.data.local.dao.LedgerMetaDao
 import com.bookkeeping.app.data.local.entity.TransactionEntity
 import com.bookkeeping.app.data.local.entity.ImportBatchEntity
+import com.bookkeeping.app.data.local.entity.DuplicateLinkChangeEntity
 import com.bookkeeping.app.data.local.entity.ImportIdentityEntity
 import com.bookkeeping.app.data.local.entity.TransactionCategory
 import com.bookkeeping.app.data.local.entity.TransactionType
@@ -287,7 +288,8 @@ class TransactionRepository @Inject constructor(
         if (transaction.duplicateOfId?.let { dao.getById(it)?.deletedAt != null } == true) return@writeLedger false
         if (transaction.duplicateOfId == null && transaction.relationKind in setOf("REFUND", "REIMBURSEMENT")) {
             val original = transaction.relatedTransactionId?.let { dao.getById(it) } ?: return@writeLedger false
-            if (original.deletedAt != null || dao.returnedAmount(original.id) + transaction.amountCents > original.amountCents)
+            if (original.deletedAt != null || original.duplicateOfId != null || original.type != "EXPENSE" ||
+                dao.returnedAmount(original.id) + transaction.amountCents > original.amountCents)
                 return@writeLedger false
         }
         val anchorId = if (transaction.relationKind == "TRANSFER_IN")
@@ -391,28 +393,93 @@ class TransactionRepository @Inject constructor(
             updatedPrimary = updatedPrimary.copy(relatedTransactionId = secondary.relatedTransactionId,
                 relationKind = secondary.relationKind, category = secondary.category)
         }
+        if (metaDao.duplicateChanges(secondary.id).isNotEmpty()) return@writeLedger false
         val secondaryReturns = dao.returnsFor(secondary.id)
-        if (dao.returnedAmount(primary.id) + secondaryReturns.sumOf { it.amountCents } > primary.amountCents)
-            return@writeLedger false
-        secondaryReturns.forEach { dao.update(it.copy(relatedTransactionId = primary.id,
-            category = primary.category)) }
-        dao.update(updatedPrimary)
-        dao.update(secondary.copy(duplicateOfId = primary.id, reviewReason = null))
+        val before = (listOf(primary, secondary) + secondaryReturns).associateBy { it.id }
+        val changed = linkedMapOf(
+            primary.id to updatedPrimary,
+            secondary.id to secondary.copy(duplicateOfId = primary.id, reviewReason = null),
+        )
+        secondaryReturns.forEach { changed[it.id] = it.copy(relatedTransactionId = primary.id,
+            category = updatedPrimary.category) }
+        if (!validReturnChanges(changed)) return@writeLedger false
+        // A secondary marker is saved even when no relationship needed to move.
+        for ((id, after) in changed) {
+            val old = before.getValue(id)
+            if (id == secondary.id || old.relatedTransactionId != after.relatedTransactionId ||
+                old.relationKind != after.relationKind || old.category != after.category) {
+                metaDao.insertDuplicateChange(DuplicateLinkChangeEntity(secondary.id, id, primary.id,
+                    old.relatedTransactionId, old.relationKind, old.category,
+                    after.relatedTransactionId, after.relationKind, after.category))
+            }
+        }
+        changed.values.forEach { dao.update(it) }
         true
     }
 
     suspend fun unlinkDuplicate(id: Long): Boolean = database.writeLedger {
-        val transaction = dao.getById(id) ?: return@writeLedger false
-        if (transaction.duplicateOfId == null) return@writeLedger false
-        val primary = dao.getById(transaction.duplicateOfId)
-        val sameReturn = transaction.relationKind in setOf("REFUND", "REIMBURSEMENT") &&
-            primary != null && primary.relatedTransactionId == transaction.relatedTransactionId &&
-            primary.relationKind == transaction.relationKind
-        dao.update(transaction.copy(duplicateOfId = null, reviewReason = "已取消关联，请确认是否为独立交易",
-            relatedTransactionId = if (sameReturn) null else transaction.relatedTransactionId,
-            relationKind = if (sameReturn) "${transaction.relationKind}_PENDING" else transaction.relationKind,
-            category = if (sameReturn) TransactionCategory.OTHER.name else transaction.category))
+        val secondary = dao.getById(id)?.takeIf { it.deletedAt == null } ?: return@writeLedger false
+        val primaryId = secondary.duplicateOfId ?: return@writeLedger false
+        val primary = dao.getById(primaryId)?.takeIf { it.deletedAt == null && it.duplicateOfId == null }
+            ?: return@writeLedger false
+        val history = metaDao.duplicateChanges(id)
+        val changed = linkedMapOf<Long, TransactionEntity>()
+        if (history.isEmpty()) {
+            // v6 links have no provenance. Never guess which refunds used to belong to this row.
+            if (secondary.relationKind in setOf("REFUND", "REIMBURSEMENT") ||
+                dao.returnHistoryCount(primary.id) > 0 || dao.returnHistoryCount(secondary.id) > 0)
+                return@writeLedger false
+        } else {
+            if (history.none { it.transactionId == id } || history.any { it.primaryId != primaryId })
+                return@writeLedger false
+            // Later evidence can depend on metadata adopted by this link, even while soft-deleted.
+            if (history.any { it.transactionId == primaryId } &&
+                dao.otherDuplicateEvidenceCount(primaryId, id) > 0) return@writeLedger false
+            for (change in history) {
+                val current = dao.getById(change.transactionId) ?: return@writeLedger false
+                if (current.relatedTransactionId != change.afterRelatedId || current.relationKind != change.afterRelationKind ||
+                    current.category != change.afterCategory || current.id != id && current.duplicateOfId != null ||
+                    current.id != id && current.id != primaryId && dao.otherDuplicateEvidenceCount(current.id, current.id) > 0)
+                    return@writeLedger false
+                changed[current.id] = current.copy(relatedTransactionId = change.beforeRelatedId,
+                    relationKind = change.beforeRelationKind, category = change.beforeCategory,
+                    modifiedAt = System.currentTimeMillis())
+            }
+        }
+        changed[id] = (changed[id] ?: secondary).copy(duplicateOfId = null,
+            reviewReason = "已取消关联，请确认是否为独立交易", modifiedAt = System.currentTimeMillis())
+        if (!validReturnChanges(changed)) return@writeLedger false
+        changed.values.forEach { dao.update(it) }
+        metaDao.deleteDuplicateChanges(id)
         true
+    }
+
+    /** Validate the prospective refund graph before changing any row, including reviewed returns. */
+    private suspend fun validReturnChanges(changed: Map<Long, TransactionEntity>): Boolean {
+        val parents = mutableSetOf<Long>()
+        for ((id, after) in changed) {
+            for (row in listOfNotNull(dao.getById(id), after)) {
+                if (row.relationKind in setOf("REFUND", "REIMBURSEMENT")) {
+                    val parentId = row.relatedTransactionId ?: return false
+                    parents += parentId
+                }
+            }
+        }
+        for (parentId in parents) {
+            val rows = (dao.returnsFor(parentId).associateBy { it.id } + changed).values.filter {
+                it.deletedAt == null && it.duplicateOfId == null && it.relatedTransactionId == parentId &&
+                    it.relationKind in setOf("REFUND", "REIMBURSEMENT")
+            }
+            if (rows.isEmpty()) continue
+            val parent = changed[parentId] ?: dao.getById(parentId) ?: return false
+            if (parent.deletedAt != null || parent.duplicateOfId != null || parent.type != "EXPENSE") return false
+            var remaining = parent.amountCents
+            for (row in rows) {
+                if (row.type != "INCOME" || row.amountCents <= 0 || row.amountCents > remaining) return false
+                remaining -= row.amountCents
+            }
+        }
+        return true
     }
 
     data class ImportResult(
@@ -454,20 +521,8 @@ class TransactionRepository @Inject constructor(
         for (bill in bills) {
             val exact = bill.importKey?.let { dao.getByImportKey(it) }
             if (exact != null) {
-                if (exact.deletedAt != null && batchId != null) {
-                    val parent = exact.relatedTransactionId?.let { dao.getById(it) }
-                    if (exact.relationKind in setOf("REFUND", "REIMBURSEMENT") && exact.duplicateOfId == null &&
-                        (parent == null || parent.deletedAt != null || parent.amountCents - dao.returnedAmount(parent.id) < exact.amountCents)) {
-                        duplicates++; continue
-                    }
-                    if (exact.duplicateOfId?.let { dao.getById(it)?.deletedAt != null } == true) { duplicates++; continue }
-                    val linked = matchingAccountForLiveTransaction(balanceAccounts, bill)
-                    dao.update(exact.copy(deletedAt = null, importBatchId = batchId,
-                        balanceAccountId = linked?.id))
-                    added++
-                    if (linked != null) balancesLinked++
-                    continue
-                }
+                // A matching import is evidence, never consent to restore a tombstone.
+                if (exact.deletedAt != null) { duplicates++; continue }
                 val upgraded = directionUpgrade(exact, bill)
                 if (upgraded != null) { dao.update(upgraded); directionsUpdated++ }
                 duplicates++

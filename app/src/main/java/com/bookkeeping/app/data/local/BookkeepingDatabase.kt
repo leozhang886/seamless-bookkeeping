@@ -14,6 +14,7 @@ import com.bookkeeping.app.data.local.entity.ImportBatchEntity
 import com.bookkeeping.app.data.local.entity.ImportIdentityEntity
 import com.bookkeeping.app.data.local.entity.BalanceCheckpointEntity
 import com.bookkeeping.app.data.local.entity.PendingNotificationEntity
+import com.bookkeeping.app.data.local.entity.DuplicateLinkChangeEntity
 import com.bookkeeping.app.data.local.entity.BudgetEntryEntity
 
 // Room 数据库本体。
@@ -22,8 +23,8 @@ import com.bookkeeping.app.data.local.entity.BudgetEntryEntity
 @Database(
     entities = [TransactionEntity::class, AccountEntity::class, ImportBatchEntity::class,
         ImportIdentityEntity::class, BalanceCheckpointEntity::class, PendingNotificationEntity::class,
-        BudgetEntryEntity::class],
-    version = 6,
+        BudgetEntryEntity::class, DuplicateLinkChangeEntity::class],
+    version = 7,
     exportSchema = true
 )
 abstract class BookkeepingDatabase : RoomDatabase() {
@@ -37,6 +38,12 @@ abstract class BookkeepingDatabase : RoomDatabase() {
 
     companion object {
         const val DB_NAME = "bookkeeping.db"
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Existing rows and relationships remain byte-for-byte unchanged.
+                db.execSQL("CREATE TABLE IF NOT EXISTS duplicate_link_changes (secondaryId INTEGER NOT NULL, transactionId INTEGER NOT NULL, primaryId INTEGER NOT NULL, beforeRelatedId INTEGER, beforeRelationKind TEXT, beforeCategory TEXT NOT NULL, afterRelatedId INTEGER, afterRelationKind TEXT, afterCategory TEXT NOT NULL, PRIMARY KEY(secondaryId, transactionId))")
+            }
+        }
         val MIGRATION_5_6 = object : Migration(5, 6) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 listOf("createdAt INTEGER", "modifiedAt INTEGER", "sourcePaymentMethod TEXT",
