@@ -20,8 +20,8 @@ class AllMigrationsTest {
     @Test fun everyReleasedSchemaUpgradesWithoutLosingAmountsOrIdentities() = runBlocking {
         val context = RuntimeEnvironment.getApplication()
         val migrations = arrayOf(BookkeepingDatabase.MIGRATION_1_2, BookkeepingDatabase.MIGRATION_2_3,
-            BookkeepingDatabase.MIGRATION_3_4, BookkeepingDatabase.MIGRATION_4_5, BookkeepingDatabase.MIGRATION_5_6)
-        for (version in 1..5) {
+            BookkeepingDatabase.MIGRATION_3_4, BookkeepingDatabase.MIGRATION_4_5, BookkeepingDatabase.MIGRATION_5_6, BookkeepingDatabase.MIGRATION_6_7)
+        for (version in 1..6) {
             val name = "migration-from-$version.db"
             context.deleteDatabase(name)
             val helper = FrameworkSQLiteOpenHelperFactory().create(SupportSQLiteOpenHelper.Configuration.builder(context)
@@ -51,6 +51,7 @@ class AllMigrationsTest {
                     assertEquals(42L, db.ledgerMetaDao().identity("old-order")!!.transactionId)
                 }
                 assertTrue(db.ledgerMetaDao().allBudgets().isEmpty())
+                assertTrue(db.ledgerMetaDao().allDuplicateChanges().isEmpty())
             } finally { db.close(); context.deleteDatabase(name) }
         }
     }

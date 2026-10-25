@@ -18,8 +18,8 @@ android {
         applicationId = "com.bookkeeping.localassets"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "1.14.1"
+        versionCode = 17
+        versionName = "1.14.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -52,6 +52,7 @@ android {
         buildConfig = true   // 启用 BuildConfig.DEBUG 用于日志门控
     }
     testOptions { unitTests.isIncludeAndroidResources = true }
+    sourceSets.getByName("test").resources.srcDir("$projectDir/schemas")
 }
 
 dependencies {

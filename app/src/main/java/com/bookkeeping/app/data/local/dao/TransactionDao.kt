@@ -69,8 +69,14 @@ interface TransactionDao {
     @Query("SELECT COUNT(*) FROM transactions WHERE duplicateOfId = :primaryId AND deletedAt IS NULL")
     suspend fun activeDuplicateCount(primaryId: Long): Int
 
+    @Query("SELECT COUNT(*) FROM transactions WHERE duplicateOfId = :primaryId AND id != :exceptId")
+    suspend fun otherDuplicateEvidenceCount(primaryId: Long, exceptId: Long): Int
+
     @Query("SELECT * FROM transactions WHERE relatedTransactionId = :originalId AND relationKind IN ('REFUND', 'REIMBURSEMENT') AND deletedAt IS NULL AND duplicateOfId IS NULL")
     suspend fun returnsFor(originalId: Long): List<TransactionEntity>
+
+    @Query("SELECT COUNT(*) FROM transactions WHERE relatedTransactionId = :originalId AND relationKind IN ('REFUND','REIMBURSEMENT')")
+    suspend fun returnHistoryCount(originalId: Long): Int
 
     @Query("UPDATE transactions SET category = :category WHERE relatedTransactionId = :originalId AND relationKind IN ('REFUND','REIMBURSEMENT')")
     suspend fun syncReturnCategory(originalId: Long, category: String)

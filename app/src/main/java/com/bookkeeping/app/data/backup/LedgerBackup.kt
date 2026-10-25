@@ -9,6 +9,7 @@ import com.bookkeeping.app.data.local.BookkeepingDatabase
 import com.bookkeeping.app.data.local.dao.AccountDao
 import com.bookkeeping.app.data.local.dao.LedgerMetaDao
 import com.bookkeeping.app.data.local.dao.TransactionDao
+import com.bookkeeping.app.data.local.entity.DuplicateLinkChangeEntity
 import com.bookkeeping.app.data.local.entity.AccountEntity
 import com.bookkeeping.app.data.local.entity.BalanceCheckpointEntity
 import com.bookkeeping.app.data.local.entity.ImportBatchEntity
@@ -55,6 +56,7 @@ class LedgerBackup @Inject constructor(
         val checkpoints: List<BalanceCheckpointEntity>,
         val pending: List<PendingNotificationEntity>,
         val budget: BudgetSettings,
+        val duplicateChanges: List<DuplicateLinkChangeEntity>,
     )
 
     suspend fun export(uri: Uri, password: String): Result = withContext(Dispatchers.IO) {
@@ -62,7 +64,7 @@ class LedgerBackup @Inject constructor(
         budgets.ensureMigrated()
         val snapshot = database.withTransaction {
             Snapshot(accounts.getAllRaw(), transactions.getAllRaw(), meta.allBatches(),
-                meta.allIdentities(), meta.allCheckpoints(), meta.allPending(), budgets.snapshotInTransaction())
+                meta.allIdentities(), meta.allCheckpoints(), meta.allPending(), budgets.snapshotInTransaction(), meta.allDuplicateChanges())
         }
         val compressed = encode(snapshot)
         val salt = ByteArray(16).also(SecureRandom()::nextBytes)
@@ -92,6 +94,7 @@ class LedgerBackup @Inject constructor(
             val file = java.io.File(recovery, "before-restore-${System.currentTimeMillis()}.sbk")
             export(Uri.fromFile(file), password)
             database.withTransaction {
+            meta.clearDuplicateChanges()
             meta.clearPending()
             meta.clearIdentities()
             meta.clearBatches()
@@ -105,6 +108,7 @@ class LedgerBackup @Inject constructor(
             snapshot.checkpoints.forEach { meta.restoreCheckpoint(it) }
             snapshot.pending.forEach { meta.restorePending(it) }
             budgets.replaceInTransaction(snapshot.budget)
+            snapshot.duplicateChanges.forEach { meta.insertDuplicateChange(it) }
             }
         }
         Result(snapshot.accounts.size, snapshot.transactions.size)
@@ -150,7 +154,7 @@ class LedgerBackup @Inject constructor(
                 }
             }
             val writer = java.io.OutputStreamWriter(bounded, Charsets.UTF_8)
-            writer.write("{\"format\":2,\"databaseVersion\":6")
+            writer.write("{\"format\":3,\"databaseVersion\":7")
             fun <T> rows(name: String, values: List<T>, encodeRow: (T) -> JSONObject) {
                 writer.write(",\"$name\":[")
                 values.forEachIndexed { index, value ->
@@ -198,6 +202,10 @@ class LedgerBackup @Inject constructor(
             .put("sourceAccountKind", x.sourceAccountKind).put("bankFlow", x.bankFlow)
             .put("relationKind", x.relationKind).put("receivedAt", x.receivedAt).put("eventKey", x.eventKey)
             .put("transactionId", x.transactionId) }
+            rows("duplicateChanges", s.duplicateChanges) { x -> JSONObject()
+                .put("secondaryId", x.secondaryId).put("transactionId", x.transactionId).put("primaryId", x.primaryId)
+                .put("beforeRelatedId", x.beforeRelatedId).put("beforeRelationKind", x.beforeRelationKind).put("beforeCategory", x.beforeCategory)
+                .put("afterRelatedId", x.afterRelatedId).put("afterRelationKind", x.afterRelationKind).put("afterCategory", x.afterCategory) }
             writer.write(",\"budget\":")
             writer.write(JSONObject().put("monthlyTotalCents", s.budget.monthlyTotalCents)
                 .put("categories", JSONObject().also { o -> s.budget.perCategory.forEach { (k, v) -> o.put(k.name, v) } }).toString())
@@ -246,6 +254,7 @@ class LedgerBackup @Inject constructor(
         var identities: List<ImportIdentityEntity> = emptyList()
         var checkpoints: List<BalanceCheckpointEntity> = emptyList()
         var pending: List<PendingNotificationEntity> = emptyList()
+        var duplicateChanges: List<DuplicateLinkChangeEntity> = emptyList()
         var budgetJson = JSONObject()
         var format = 0; var version = 0
         val seen = mutableSetOf<String>()
@@ -298,13 +307,19 @@ class LedgerBackup @Inject constructor(
             sourceAccountKind = x.nullString("sourceAccountKind"), bankFlow = x.nullString("bankFlow"),
             relationKind = x.nullString("relationKind"), receivedAt = x.nullLong("receivedAt"),
             eventKey = x.nullString("eventKey"), transactionId = x.nullLong("transactionId")) }
+                "duplicateChanges" -> duplicateChanges = rows { x -> DuplicateLinkChangeEntity(
+                    x.strictLong("secondaryId"), x.strictLong("transactionId"), x.strictLong("primaryId"),
+                    x.nullLong("beforeRelatedId"), x.nullString("beforeRelationKind"), x.getString("beforeCategory"),
+                    x.nullLong("afterRelatedId"), x.nullString("afterRelationKind"), x.getString("afterCategory")) }
                 "budget" -> budgetJson = objectRow()
                 else -> error("备份包含未知分区")
             }
         }
         reader.endObject()
         require(reader.peek() == android.util.JsonToken.END_DOCUMENT) { "备份末尾有多余内容" }
-        require(format in 1..2 && version in 1..6 && seen.containsAll(setOf("accounts", "transactions", "batches", "identities", "checkpoints", "pending", "budget"))) { "备份版本不受支持或分区不完整" }
+        require(format in 1..3 && version in 1..7 && seen.containsAll(setOf("accounts", "transactions", "batches", "identities", "checkpoints", "pending", "budget"))) { "备份版本不受支持或分区不完整" }
+        require((format < 3 && version <= 6 && "duplicateChanges" !in seen) ||
+            (format == 3 && version == 7 && "duplicateChanges" in seen)) { "备份缺少重复关联撤销记录" }
         val categories = budgetJson.getJSONObject("categories")
         val budget = BudgetSettings(budgetJson.strictLong("monthlyTotalCents"),
             categories.keys().asSequence().mapNotNull { name ->
@@ -346,7 +361,17 @@ class LedgerBackup @Inject constructor(
         require(returned.groupBy { it.relatedTransactionId }.all { (id, rows) ->
             rows.fold(0L) { sum, row -> Math.addExact(sum, row.amountCents) } <= byId.getValue(id!!).amountCents
         }) { "备份的退款金额超过原支出" }
-        return Snapshot(accountList, transactionList, batches, identities, checkpoints, pending, budget)
+        require(duplicateChanges.map { it.secondaryId to it.transactionId }.toSet().size == duplicateChanges.size &&
+            duplicateChanges.all { change ->
+                change.secondaryId in transactionIds && change.transactionId in transactionIds && change.primaryId in transactionIds &&
+                    change.secondaryId != change.primaryId &&
+                    (change.beforeRelatedId == null || change.beforeRelatedId in transactionIds) &&
+                    (change.afterRelatedId == null || change.afterRelatedId in transactionIds) &&
+                    byId.getValue(change.secondaryId).duplicateOfId == change.primaryId
+            } && duplicateChanges.groupBy { it.secondaryId }.all { (id, rows) ->
+                rows.any { it.transactionId == id } && rows.map { it.primaryId }.distinct().size == 1
+            }) { "备份的重复关联撤销记录无效" }
+        return Snapshot(accountList, transactionList, batches, identities, checkpoints, pending, budget, duplicateChanges)
     }
 
     private fun JSONObject.strictLong(name: String): Long {
